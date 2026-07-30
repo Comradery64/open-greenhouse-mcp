@@ -451,3 +451,38 @@ class TestSetOnBehalfOf:
 
         headers = client._harvest_write_headers()
         assert headers["On-Behalf-Of"] == "12345"
+
+
+# ---------------------------------------------------------------------------
+# TestUnenumeratedErrorStatuses
+# ---------------------------------------------------------------------------
+
+class TestUnenumeratedErrorStatuses:
+    """Statuses outside the old hardcoded list must still become errors.
+
+    Regression: `_handle_response` enumerated 401/403/404/422/429/5xx, so a 400 or
+    409 fell through to `_parse_body` and `_paginated_get` wrapped the error body
+    as `{"items": [{"message": ...}]}` — indistinguishable from a real record.
+    """
+
+    @pytest.mark.parametrize("status", [400, 405, 409, 410, 418])
+    @pytest.mark.asyncio
+    async def test_error_status_is_flagged_not_returned_as_data(
+        self, client, mock_api, status
+    ):
+        mock_api.get(f"{HARVEST_BASE}/jobs").mock(
+            return_value=httpx.Response(status, json={"message": "nope"})
+        )
+        result = await client.harvest_get("/jobs")
+        assert client._is_error(result), f"{status} was not flagged as an error"
+        assert result["status_code"] == status
+        assert "items" not in result
+
+    @pytest.mark.asyncio
+    async def test_400_does_not_masquerade_as_a_single_item(self, client, mock_api):
+        mock_api.get(f"{HARVEST_BASE}/jobs").mock(
+            return_value=httpx.Response(400, json={"message": "Invalid status: bogus"})
+        )
+        result = await client.harvest_get("/jobs", params={"status": "bogus"})
+        assert result.get("items") != [{"message": "Invalid status: bogus"}]
+        assert result["status_code"] == 400
