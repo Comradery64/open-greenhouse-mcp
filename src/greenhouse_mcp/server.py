@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 from greenhouse_mcp.client import GreenhouseClient
 from greenhouse_mcp.errors import build_error, config_error, internal_error
+from greenhouse_mcp.shaping import shape_result
 from greenhouse_mcp.permissions import UserPermissions, resolve_user_permissions
 
 load_dotenv()
@@ -94,9 +95,12 @@ def _make_tool_wrapper(
             except PermissionError as e:
                 return build_error(403, str(e), f"/{fn.__name__}")
         try:
-            return await fn(client, *args, **kwargs)
+            result = await fn(client, *args, **kwargs)
         except Exception as e:  # noqa: BLE001 - never leak a traceback to the user
             return internal_error(f"{type(e).__name__}: {e}", f"/{fn.__name__}")
+        # Shaped at the MCP boundary only, so composite tools calling list_*
+        # internally still receive complete data.
+        return shape_result(fn.__name__, result)
 
     # Remove the `client` parameter from the signature so FastMCP
     # doesn't expose it as a tool parameter.
