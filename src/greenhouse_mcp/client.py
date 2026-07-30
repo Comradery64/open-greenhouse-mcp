@@ -100,6 +100,10 @@ class GreenhouseClient:
         }
         if status_code in messages:
             msg = messages[status_code]
+        elif status_code == 400:
+            msg = "Bad request. Check the request parameters."
+        elif status_code == 409:
+            msg = "Conflict with the current state of the record."
         elif 500 <= status_code < 600:
             msg = f"Greenhouse server error (HTTP {status_code})."
         else:
@@ -163,14 +167,12 @@ class GreenhouseClient:
 
     def _handle_response(self, resp: httpx.Response) -> dict[str, Any]:
         """Convert an httpx.Response to either the parsed body or an error dict."""
-        if resp.status_code == 429:
-            return self._error_dict(429, self._parse_body(resp))
-        if resp.status_code in (401, 403, 404, 422):
-            detail = self._parse_body(resp)
-            return self._error_dict(resp.status_code, detail)
-        if 500 <= resp.status_code < 600:
-            detail = self._parse_body(resp)
-            return self._error_dict(resp.status_code, detail)
+        # Every non-success status becomes a structured error. Enumerating
+        # individual codes let 400 and 409 fall through as if they were success
+        # bodies, which `_paginated_get` then wrapped as a bogus one-item result —
+        # so a rejected filter looked like a real record.
+        if resp.status_code >= 400:
+            return self._error_dict(resp.status_code, self._parse_body(resp))
         return self._parse_body(resp)  # type: ignore[no-any-return]
 
     # ------------------------------------------------------------------
