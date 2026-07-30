@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from greenhouse_mcp.errors import build_error
 from greenhouse_mcp.logging import log_api_call
 
 HARVEST_BASE = "https://harvest.greenhouse.io/v1"
@@ -90,28 +91,11 @@ class GreenhouseClient:
         return m.group(1) if m else None
 
     @staticmethod
-    def _error_dict(status_code: int, detail: Any = None) -> dict[str, Any]:
-        messages: dict[int, str] = {
-            401: "Invalid API key. Check GREENHOUSE_API_KEY.",
-            403: "Permission denied. Check that your API key has the required permissions.",
-            404: "Resource not found.",
-            422: "Validation error. Check the request data.",
-            429: "Rate limit exceeded. Please try again later.",
-        }
-        if status_code in messages:
-            msg = messages[status_code]
-        elif status_code == 400:
-            msg = "Bad request. Check the request parameters."
-        elif status_code == 409:
-            msg = "Conflict with the current state of the record."
-        elif 500 <= status_code < 600:
-            msg = f"Greenhouse server error (HTTP {status_code})."
-        else:
-            msg = f"Unexpected HTTP error (status {status_code})."
-        result: dict[str, Any] = {"error": msg, "status_code": status_code}
-        if detail is not None:
-            result["detail"] = detail
-        return result
+    def _error_dict(
+        status_code: int, detail: Any = None, url: str | None = None
+    ) -> dict[str, Any]:
+        """Build a relayable error payload (plain-English message + support code)."""
+        return build_error(status_code, detail, url)
 
     @staticmethod
     def _is_error(result: dict[str, Any]) -> bool:
@@ -172,7 +156,8 @@ class GreenhouseClient:
         # bodies, which `_paginated_get` then wrapped as a bogus one-item result —
         # so a rejected filter looked like a real record.
         if resp.status_code >= 400:
-            return self._error_dict(resp.status_code, self._parse_body(resp))
+            url = str(resp.request.url) if resp.request is not None else None
+            return self._error_dict(resp.status_code, self._parse_body(resp), url)
         return self._parse_body(resp)  # type: ignore[no-any-return]
 
     # ------------------------------------------------------------------
@@ -360,7 +345,9 @@ class GreenhouseClient:
         try:
             resp = await http.get(url, follow_redirects=True)
             if resp.status_code >= 400:
-                return self._error_dict(resp.status_code)
+                # Fixed label rather than the URL: attachment URLs are signed and
+                # single-use, so their path adds nothing an engineer can act on.
+                return self._error_dict(resp.status_code, url="/attachment-download")
             content_type = resp.headers.get("content-type", "")
             if "text" in content_type or "json" in content_type:
                 return {"content": resp.text, "content_type": content_type}
@@ -370,7 +357,7 @@ class GreenhouseClient:
                 "size_bytes": len(resp.content),
             }
         except Exception as e:
-            return {"error": f"Download failed: {e}", "status_code": 0}
+            return self._error_dict(0, f"Download failed: {e}", "/attachment-download")
 
     # ------------------------------------------------------------------
     # Lifecycle

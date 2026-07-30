@@ -172,7 +172,13 @@ class TestErrorHandling:
             return_value=httpx.Response(401, json={"message": "unauthorized"})
         )
         result = await client.harvest_get("/candidates")
-        assert result["error"] == "Invalid API key. Check GREENHOUSE_API_KEY."
+        # Asserts the contract, not the prose: the message is user-facing and
+        # expected to be reworded, but it must identify the key as the cause and
+        # carry a support code the user can relay.
+        assert result["status_code"] == 401
+        assert "key" in result["error"].lower()
+        assert result["support_code"].startswith("GH401-")
+        assert result["user_can_resolve"] is False
         assert result["status_code"] == 401
 
     @pytest.mark.asyncio

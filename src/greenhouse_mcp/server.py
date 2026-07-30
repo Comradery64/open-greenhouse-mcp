@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from greenhouse_mcp.client import GreenhouseClient
+from greenhouse_mcp.errors import build_error, config_error, internal_error
 from greenhouse_mcp.permissions import UserPermissions, resolve_user_permissions
 
 load_dotenv()
@@ -73,7 +74,12 @@ def _make_tool_wrapper(
 
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        client = get_client()
+        # A missing or blank key is the likeliest failure for a non-technical
+        # user, and must not surface as a raw traceback.
+        try:
+            client = get_client()
+        except ValueError as e:
+            return config_error(str(e), "/not-configured")
         if is_write and _user_permissions is not None:
             # Check job_id or new_job_id (move_application uses new_job_id).
             # NOTE: Many recruiter write tools operate on application_id or
@@ -86,8 +92,11 @@ def _make_tool_wrapper(
             try:
                 _check_job_scope(_user_permissions, job_id)
             except PermissionError as e:
-                return {"error": str(e), "status_code": 403}
-        return await fn(client, *args, **kwargs)
+                return build_error(403, str(e), f"/{fn.__name__}")
+        try:
+            return await fn(client, *args, **kwargs)
+        except Exception as e:  # noqa: BLE001 - never leak a traceback to the user
+            return internal_error(f"{type(e).__name__}: {e}", f"/{fn.__name__}")
 
     # Remove the `client` parameter from the signature so FastMCP
     # doesn't expose it as a tool parameter.
