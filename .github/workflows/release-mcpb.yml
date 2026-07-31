@@ -1,0 +1,164 @@
+name: Release MCPB
+
+# Builds the Claude Desktop extension bundle (.mcpb) and attaches it to a GitHub
+# Release. Push a tag like v0.5.0 to cut a release, or run manually to produce a
+# build artifact without publishing.
+#
+# One bundle serves every platform. It carries no interpreter and no compiled
+# wheels; the host provisions Python and resolves dependencies with uv on first
+# run, so the same artifact installs on macOS (Intel and Apple Silicon), Windows,
+# and Linux. That matters because the Claude admin console distributes a single
+# .mcpb per extension, so a per-platform build cannot serve a mixed fleet.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into manifest.json (e.g. 0.5.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # Nothing in the bundle is platform-specific, so this builds on Linux
+  # regardless of which platforms the artifact targets.
+  bundle-uv:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          pkg=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          if [ "$pkg" != "$version" ]; then
+            echo "::error::Tag says $version but pyproject.toml says $pkg." && exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Install the mcpb CLI
+        run: npm install -g @anthropic-ai/mcpb@2.1.2
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Stage the bundle
+        run: |
+          set -euo pipefail
+          mkdir -p uvbundle/src
+          cp extension-uv/manifest.json uvbundle/manifest.json
+          cp extension-uv/.mcpbignore uvbundle/.mcpbignore
+          cp extension-uv/main.py uvbundle/src/main.py
+          cp -R src/greenhouse_mcp uvbundle/src/greenhouse_mcp
+
+      - name: Generate the bundle project
+        # Dependencies are derived from the repository pyproject.toml rather than
+        # duplicated, so the two cannot drift. Declared under the real distribution
+        # name so importlib.metadata resolves the version that the startup banner
+        # and the diagnostics records report — otherwise it reads "dev".
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, re
+          repo = pathlib.Path("pyproject.toml").read_text()
+          deps = re.search(r"^dependencies = \[(.*?)^\]", repo, re.S | re.M).group(1)
+          version = os.environ["VERSION"]
+          pathlib.Path("uvbundle/pyproject.toml").write_text(
+              "# Generated from the repository pyproject.toml at build time — do not edit.\n"
+              "[project]\n"
+              'name = "open-greenhouse-mcp"\n'
+              f'version = "{version}"\n'
+              'description = "Greenhouse MCP — Claude Desktop bundle (uv runtime)"\n'
+              'requires-python = ">=3.10"\n'
+              f"dependencies = [{deps}]\n"
+              "\n[build-system]\n"
+              'requires = ["setuptools>=61.0", "wheel"]\n'
+              'build-backend = "setuptools.build_meta"\n'
+              "\n[tool.setuptools.packages.find]\n"
+              'where = ["src"]\n'
+          )
+          PY
+          # Universal lockfile: resolves for every platform, not just this runner,
+          # so a Windows user installs the same versions that were tested here.
+          uv lock --directory uvbundle
+          grep -q "win32" uvbundle/uv.lock || {
+            echo "::error::lockfile has no win32 resolution — it would not be cross-platform"
+            exit 1
+          }
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Smoke test over a real MCP handshake
+        # Drives the manifest's real command and speaks stdio JSON-RPC, so this
+        # exercises what Claude Desktop will do rather than importing the module.
+        # The driver lives in the repo so it can be run locally against a bundle.
+        run: python3 extension-uv/smoke_test.py uvbundle
+
+      - name: Confirm compiled dependencies resolve for this platform
+        # These are the most likely thing to be missing or built wrong, and they
+        # fail only on import.
+        run: |
+          set -euo pipefail
+          uv run --directory uvbundle python -c "import pdfplumber, docx, lxml"
+          echo "compiled dependencies import"
+
+      - name: Pack
+        run: |
+          set -euo pipefail
+          rm -rf uvbundle/.venv
+          find uvbundle -name '__pycache__' -type d -prune -exec rm -rf {} + || true
+          find uvbundle -name '*.egg-info' -prune -exec rm -rf {} + || true
+          cd uvbundle
+          mcpb validate manifest.json
+          mcpb pack . "greenhouse-mcp-uv-${{ steps.version.outputs.version }}.mcpb"
+
+      - name: Report bundle size
+        run: |
+          set -euo pipefail
+          f="uvbundle/greenhouse-mcp-uv-${{ steps.version.outputs.version }}.mcpb"
+          {
+            echo "### Cross-platform bundle ${{ steps.version.outputs.version }} (uv runtime)"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Packed size | $(du -h "$f" | cut -f1) |"
+            echo "| SHA-256 | \`$(shasum -a 256 "$f" | cut -d' ' -f1)\` |"
+            echo "| Platforms | macOS (Intel and Apple Silicon), Windows, Linux |"
+            echo ""
+            echo "Ships no interpreter and no compiled wheels. The host provisions"
+            echo "Python and resolves dependencies with uv on first run, which needs"
+            echo "network access at install time. The uv runtime type is marked"
+            echo "experimental in the MCPB spec — verify on one machine before an"
+            echo "organisation-wide rollout."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: uvbundle/greenhouse-mcp-uv-${{ steps.version.outputs.version }}.mcpb
+          generate_release_notes: true
+
+      - name: Upload build artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: greenhouse-mcp-uv-${{ steps.version.outputs.version }}-mcpb
+          path: uvbundle/greenhouse-mcp-uv-${{ steps.version.outputs.version }}.mcpb
+          retention-days: 14
