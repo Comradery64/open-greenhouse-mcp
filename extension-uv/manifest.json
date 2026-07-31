@@ -1,0 +1,78 @@
+{
+  "manifest_version": "0.4",
+  "name": "greenhouse-mcp",
+  "display_name": "Greenhouse MCP",
+  "version": "0.5.0",
+  "description": "Recruiting workflow tools for Greenhouse ATS (candidate screening, applications, pipeline search, resume scanning) inside Claude.",
+  "long_description": "Curated Greenhouse recruiting tools for Claude: candidate screening, application triage, pipeline search, and resume scanning. Resumes are extracted to text server-side (PDF and DOCX) and candidate location is detected from several signals. The tool set is fixed to the recruiter-safe curated profile. Each user must enter their own personal Greenhouse Harvest API key below (issued per-person by your Greenhouse admin) \u2014 do not use a shared or team key.",
+  "author": {
+    "name": "RadixArk"
+  },
+  "server": {
+    "type": "uv",
+    "entry_point": "src/main.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "src/main.py"
+      ],
+      "env": {
+        "GREENHOUSE_API_KEY": "${user_config.greenhouse_api_key}",
+        "GREENHOUSE_BOARD_TOKEN": "${user_config.greenhouse_board_token}",
+        "GREENHOUSE_TOOL_PROFILE": "assistant",
+        "GREENHOUSE_ON_BEHALF_OF": "${user_config.on_behalf_of}",
+        "GREENHOUSE_LOG_LEVEL": "${user_config.log_level}"
+      }
+    }
+  },
+  "keywords": [
+    "greenhouse",
+    "ats",
+    "recruiting",
+    "hiring"
+  ],
+  "license": "MIT",
+  "user_config": {
+    "greenhouse_api_key": {
+      "type": "string",
+      "title": "Greenhouse Harvest API Key (personal)",
+      "description": "Your own personal Greenhouse Harvest API key \u2014 do not share this with teammates. Ask your Greenhouse admin to issue you an individual key (Configure \u2192 Dev Center \u2192 API Credential Management) scoped to only the permissions you need, so actions are attributed to you and can be revoked individually.",
+      "sensitive": true,
+      "required": true
+    },
+    "greenhouse_board_token": {
+      "type": "string",
+      "title": "Greenhouse Job Board Token",
+      "description": "Your Greenhouse Job Board URL token, for read-only public job board tools. Optional.",
+      "sensitive": true,
+      "required": false
+    },
+    "on_behalf_of": {
+      "type": "string",
+      "title": "On-Behalf-Of User ID",
+      "description": "Optional Greenhouse user ID to attribute write actions to, for audit trail purposes.",
+      "required": false
+    },
+    "log_level": {
+      "type": "string",
+      "title": "Log Level",
+      "description": "Logging verbosity: debug, info, warning, or error.",
+      "default": "warning",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}
