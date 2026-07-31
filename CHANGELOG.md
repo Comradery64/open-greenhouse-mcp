@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.5.0
+
+Reliability and error-reporting pass, aimed at deployments where the end users
+are recruiters rather than engineers.
+
+### Added
+- **Result-size shaping** — Tool results are now measured and kept within a size
+  budget instead of being returned at whatever size the API produced. A 500-job
+  `/jobs` page runs to ~1.1MB and clients reject an oversized tool result
+  outright, so the user got a bare failure instead of an answer. Shaping applies
+  in four lazy stages: return untouched if it already fits, project list rows to
+  the fields recruiters read, clamp free text, then drop rows. Results carry
+  `returned`/`total_found` and a note telling the model to narrow by a real
+  filter or walk pages and combine — explicitly not to mention flags or paging
+  to the user. Composite tools calling `list_*` internally bypass shaping and
+  still receive complete data. Budget defaults to 60KB, override with
+  `GREENHOUSE_MAX_RESULT_BYTES`.
+- **User-relayable errors** — Every failure now carries a plain-English
+  `user_message`, a `support_code` (`GH<status>-<MMDD>-<HHMM>-<hash>`) the user
+  can paste into a support request, and `user_can_resolve` so "check the
+  spelling" is distinguished from "escalate, you cannot fix this". The code's
+  hash covers status and masked endpoint, so repeat reports of the same failure
+  group together while the timestamp still pins each one to a log line. An
+  `action_for_claude` field instructs the model to surface the message and code
+  verbatim rather than smoothing the error into "I could not find that".
+- **Always-on diagnostics file** — Notable events append to a JSON-lines file at
+  a fixed, predictable path (beside Claude's own logs on macOS), so support is
+  "send me this file" rather than asking a recruiter to reproduce with logging
+  raised. Independent of `GREENHOUSE_LOG_LEVEL` and stderr, both of which make
+  capture unreliable in a packaged client. Rotates at 2MB, clips long detail,
+  and swallows all errors so it can never break a tool call. Configure with
+  `GREENHOUSE_DIAGNOSTICS_FILE`, disable with `GREENHOUSE_DIAGNOSTICS=off`.
+
+### Changed
+- **Default tool profile is now `recruiter`, not `full`.** An unset or
+  unrecognised `GREENHOUSE_TOOL_PROFILE` previously registered every tool with
+  writes enabled, including destructive ones — the worst available default for
+  an operator who has chosen nothing, and easy to reach accidentally: a packaged
+  bundle that fails to substitute its `${user_config.tool_profile}` placeholder
+  passes an unrecognised string and landed there silently. Such a rejected value
+  now also writes an `unknown_tool_profile` diagnostic so the substitution
+  failure is visible. Explicit values, including `full`, are unchanged.
+- Missing credentials, unexpected exceptions inside a tool, and job-scope denials
+  now return structured relayable errors instead of a raw `ValueError`
+  traceback, an unhandled exception, or a bare `{"error": ...}` dict.
+
+### Fixed
+- **Error statuses outside the enumerated list were treated as success data.**
+  `_handle_response` special-cased 401/403/404/422/429/5xx and let everything
+  else fall through to `_parse_body`, so a 400 or 409 body was wrapped by
+  `_paginated_get` as `{"items": [{"message": ...}]}` — a rejected filter value
+  came back looking like a genuine record. Any status >= 400 is now an error.
+
 ## 0.4.0
 
 ### Added

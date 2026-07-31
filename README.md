@@ -17,7 +17,7 @@ Most Greenhouse MCP servers mirror the API endpoint by endpoint. This one is bui
 | Profile | Tools | Can write? | Recommended for |
 |---|---|---|---|
 | `read-only` | 103 | No | First-time setup, reporting, hiring managers |
-| `recruiter` | 127 | Yes (safe ops) | Day-to-day recruiting work |
+| `recruiter` **(default)** | 127 | Yes (safe ops) | Day-to-day recruiting work |
 | `full` | 181 | Yes (all) | Admins, ops, advanced automation |
 
 ## Quick Start
@@ -148,10 +148,13 @@ High-level tools that combine multiple API calls into single operations.
 |---|---|---|
 | `GREENHOUSE_API_KEY` | Yes* | Harvest API key |
 | `GREENHOUSE_BOARD_TOKEN` | Yes* | Job board URL slug. *At least one required |
-| `GREENHOUSE_TOOL_PROFILE` | No | `full` (default), `recruiter`, or `read-only` |
+| `GREENHOUSE_TOOL_PROFILE` | No | `recruiter` (default), `read-only`, or `full` |
 | `GREENHOUSE_ON_BEHALF_OF` | No | Greenhouse user ID for write audit trail |
 | `GREENHOUSE_LOG_LEVEL` | No | `debug`, `info`, `warning` (default), `error` |
 | `GREENHOUSE_LOG_FILE` | No | Log file path (defaults to stderr) |
+| `GREENHOUSE_MAX_RESULT_BYTES` | No | Tool-result size budget in bytes (default `60000`) |
+| `GREENHOUSE_DIAGNOSTICS_FILE` | No | Diagnostics file path (defaults beside Claude's logs) |
+| `GREENHOUSE_DIAGNOSTICS` | No | Set `off` to disable the diagnostics file |
 
 ### Logging
 
@@ -167,6 +170,87 @@ Structured JSON logging for observability. Set `GREENHOUSE_LOG_LEVEL=info` to en
 - **[Usage Examples](docs/examples.md)** — Real conversations with full output
 - **[Advanced Setup](docs/advanced.md)** — Webhook receiver, ingestion API, board-token mode
 - **[Development](docs/development.md)** — Contributing, testing, project structure
+
+## Changelog
+
+Current version: **0.5.0**. Full detail for every release lives in
+[CHANGELOG.md](CHANGELOG.md); this is the short version.
+
+### 0.5.0 — reliability and error reporting
+
+Aimed at deployments where the people using the tools are recruiters, not
+engineers, so a failure has to be self-explanatory and reportable.
+
+- **Result-size shaping** — results are measured and kept within a size budget
+  (60KB default, `GREENHOUSE_MAX_RESULT_BYTES` to override). A 500-job `/jobs`
+  page runs to ~1.1MB and clients reject an oversized tool result outright, so
+  the user saw a bare failure instead of an answer. Shaping degrades lazily:
+  untouched if it already fits, then field projection, then text clamping, then
+  dropping rows — attaching `returned`/`total_found` and a note telling the model
+  to narrow by a real filter or walk pages, rather than telling the user about
+  flags. Composite tools calling `list_*` internally still get complete data.
+- **User-relayable errors** — every failure carries a plain-English
+  `user_message`, a `support_code` like `GH403-0730-1421-7F2D` the user can paste
+  into a support request, and `user_can_resolve` to separate "check the spelling"
+  from "escalate, you cannot fix this".
+- **Always-on diagnostics file** — notable events append to a JSON-lines file at
+  a fixed path, so support is "send me this file" instead of asking a recruiter
+  to reproduce with logging turned up. `GREENHOUSE_DIAGNOSTICS=off` to disable.
+- **Default profile is now `recruiter`, not `full`** — an unset or unrecognised
+  `GREENHOUSE_TOOL_PROFILE` used to register every tool with writes enabled,
+  including destructive ones. Explicit values, including `full`, are unchanged.
+- **Fixed: 400 and 409 responses were treated as success data** — only an
+  enumerated set of statuses became errors, so a rejected filter value came back
+  looking like a real record. Any status >= 400 is now an error.
+
+### 0.4.0 — screening and sourcing
+
+`screen_candidate`, `fetch_new_applications`, `search_pipeline_candidates`,
+`scan_all_candidates`, `batch_read_resumes`, and `scan_pipeline_resumes`, plus
+server-side PDF/DOCX resume text extraction and a 5-step location detection
+cascade.
+
+### 0.3.0 — profiles and logging
+
+Tool profiles via `GREENHOUSE_TOOL_PROFILE` (full / recruiter / read-only) and
+structured JSON logging with per-call method, status, and latency.
+
+### 0.2.1 — packaging
+
+PyPI metadata: keywords, classifiers, and project URLs.
+
+### 0.2.0 — composite tools
+
+13 composite tools for recruiter workflows.
+
+### 0.1.0 — initial release
+
+Harvest, Job Board, and Ingestion API coverage.
+
+## Relationship to upstream
+
+This project began as a fork of
+[benmonopoli/open-greenhouse-mcp](https://github.com/benmonopoli/open-greenhouse-mcp)
+(MIT, Copyright © 2026 Ben Monopoli), which remains the origin of the great majority
+of this code. The `LICENSE` file is unchanged and continues to carry that notice.
+
+Changes made here, released as 0.5.0:
+
+- Result-size shaping, so a large tool result is trimmed to fit rather than rejected
+- User-relayable error messages carrying a support code a non-technical user can pass on
+- An always-on diagnostics file, so support does not depend on reproducing a failure
+- A curated `assistant` tool profile, and a safe default profile instead of `full`
+- A fix for error statuses being treated as success data
+- An upper bound on `mcp`, without which a clean install resolves 2.0.0 and the
+  package cannot be imported at all
+- A release workflow producing a cross-platform Claude Desktop bundle
+
+To pull in future upstream work:
+
+```sh
+git remote add upstream https://github.com/benmonopoli/open-greenhouse-mcp.git
+git fetch upstream && git merge upstream/main
+```
 
 ## Feedback
 
