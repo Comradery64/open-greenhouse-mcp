@@ -52,7 +52,10 @@ class TestCreateServer:
         assert server.name == "Greenhouse"
 
     @patch.dict(os.environ, {"GREENHOUSE_API_KEY": "test-key"}, clear=False)
-    def test_api_key_registers_all_tools(self):
+    def test_api_key_registers_all_tools(self, monkeypatch):
+        # Asks for "full" explicitly: this asserts the whole inventory, and the
+        # default profile is deliberately the curated set.
+        monkeypatch.setenv("GREENHOUSE_TOOL_PROFILE", "full")
         server = create_server()
         tools = server._tool_manager._tools
         # Should have harvest + board + ingestion + webhook tools
@@ -65,6 +68,9 @@ class TestCreateServer:
         """Tools are registered at startup for introspection even without credentials."""
         excluded = ("GREENHOUSE_API_KEY", "GREENHOUSE_BOARD_TOKEN")
         env = {k: v for k, v in os.environ.items() if k not in excluded}
+        # Asks for "full" explicitly: this asserts the whole inventory, and the
+        # default profile is deliberately the curated set.
+        env["GREENHOUSE_TOOL_PROFILE"] = "full"
         with patch.dict(os.environ, env, clear=True):
             server = create_server()
             tools = list(server._tool_manager._tools.keys())
@@ -91,6 +97,9 @@ class TestUserCentricDescriptions:
         excluded = ("GREENHOUSE_API_KEY", "GREENHOUSE_BOARD_TOKEN", "GREENHOUSE_TOOL_PROFILE")
         env = {k: v for k, v in os.environ.items() if k not in excluded}
         env["GREENHOUSE_API_KEY"] = "test-key"
+        # Ask for "full" explicitly: these assertions are about the whole tool
+        # inventory, and the default profile is deliberately not "full".
+        env["GREENHOUSE_TOOL_PROFILE"] = "full"
         with patch.dict(os.environ, env, clear=True):
             server = create_server()
             tools = list(server._tool_manager._tools.keys())
@@ -103,6 +112,9 @@ class TestUserCentricDescriptions:
         excluded = ("GREENHOUSE_API_KEY", "GREENHOUSE_BOARD_TOKEN", "GREENHOUSE_TOOL_PROFILE")
         env = {k: v for k, v in os.environ.items() if k not in excluded}
         env["GREENHOUSE_API_KEY"] = "test-key"
+        # Ask for "full" explicitly: these assertions are about the whole tool
+        # inventory, and the default profile is deliberately not "full".
+        env["GREENHOUSE_TOOL_PROFILE"] = "full"
         with patch.dict(os.environ, env, clear=True):
             server = create_server()
             tools = server._tool_manager._tools
@@ -138,6 +150,9 @@ class TestUserCentricDescriptions:
         excluded = ("GREENHOUSE_API_KEY", "GREENHOUSE_BOARD_TOKEN", "GREENHOUSE_TOOL_PROFILE")
         env = {k: v for k, v in os.environ.items() if k not in excluded}
         env["GREENHOUSE_API_KEY"] = "test-key"
+        # Ask for "full" explicitly: these assertions are about the whole tool
+        # inventory, and the default profile is deliberately not "full".
+        env["GREENHOUSE_TOOL_PROFILE"] = "full"
         with patch.dict(os.environ, env, clear=True):
             server = create_server()
             tools = server._tool_manager._tools
@@ -179,8 +194,80 @@ class TestUserCentricDescriptions:
         excluded = ("GREENHOUSE_API_KEY", "GREENHOUSE_BOARD_TOKEN", "GREENHOUSE_TOOL_PROFILE")
         env = {k: v for k, v in os.environ.items() if k not in excluded}
         env["GREENHOUSE_API_KEY"] = "test-key"
+        # Ask for "full" explicitly: these assertions are about the whole tool
+        # inventory, and the default profile is deliberately not "full".
+        env["GREENHOUSE_TOOL_PROFILE"] = "full"
         with patch.dict(os.environ, env, clear=True):
             server = create_server()
             tools = server._tool_manager._tools
             empty = [name for name, tool in tools.items() if not (tool.description or "").strip()]
             assert not empty, f"Tools with empty descriptions: {empty}"
+
+
+# ---------------------------------------------------------------------------
+# TestProfileFallback
+# ---------------------------------------------------------------------------
+
+class TestProfileFallback:
+    """An operator who has chosen nothing must not get every destructive tool.
+
+    Regression: an unset or unrecognised GREENHOUSE_TOOL_PROFILE selected "full".
+    """
+
+    def _profile_for(self, monkeypatch, value):
+        import importlib
+
+        from greenhouse_mcp import server as server_module
+
+        if value is None:
+            monkeypatch.delenv("GREENHOUSE_TOOL_PROFILE", raising=False)
+        else:
+            monkeypatch.setenv("GREENHOUSE_TOOL_PROFILE", value)
+        monkeypatch.setenv("GREENHOUSE_API_KEY", "test-key")
+        monkeypatch.delenv("GREENHOUSE_READ_ONLY", raising=False)
+        monkeypatch.delenv("GREENHOUSE_USER_ID", raising=False)
+        importlib.reload(server_module)
+        return server_module
+
+    def test_unset_falls_back_to_assistant(self, monkeypatch, capsys):
+        self._profile_for(monkeypatch, None)
+        assert "Profile: assistant" in capsys.readouterr().err
+
+    def test_unrecognised_value_falls_back_to_assistant(self, monkeypatch, capsys):
+        self._profile_for(monkeypatch, "nonsense")
+        assert "Profile: assistant" in capsys.readouterr().err
+
+    def test_unsubstituted_bundle_placeholder_falls_back(self, monkeypatch, capsys):
+        self._profile_for(monkeypatch, "${user_config.tool_profile}")
+        assert "Profile: assistant" in capsys.readouterr().err
+
+    def test_explicit_recruiter_is_still_honoured(self, monkeypatch, capsys):
+        self._profile_for(monkeypatch, "recruiter")
+        assert "Profile: recruiter" in capsys.readouterr().err
+
+    def test_assistant_registers_only_the_curated_set(self, monkeypatch):
+        from greenhouse_mcp.server import _ASSISTANT_TOOLS, create_server
+
+        excluded = ("GREENHOUSE_API_KEY", "GREENHOUSE_BOARD_TOKEN", "GREENHOUSE_TOOL_PROFILE")
+        env = {k: v for k, v in os.environ.items() if k not in excluded}
+        env["GREENHOUSE_API_KEY"] = "test-key"
+        env["GREENHOUSE_TOOL_PROFILE"] = "assistant"
+        with patch.dict(os.environ, env, clear=True):
+            tools = set(create_server()._tool_manager._tools)
+        # Every curated tool must exist, or the profile silently ships a short set.
+        assert _ASSISTANT_TOOLS - tools == set()
+        assert tools == _ASSISTANT_TOOLS
+
+    def test_assistant_excludes_destructive_tools(self, monkeypatch):
+        from greenhouse_mcp.server import _ASSISTANT_TOOLS
+
+        for name in _ASSISTANT_TOOLS:
+            assert not name.startswith(("delete_", "remove_", "anonymize_", "merge_"))
+
+    def test_explicit_full_is_still_honoured(self, monkeypatch, capsys):
+        self._profile_for(monkeypatch, "full")
+        assert "Profile: full" in capsys.readouterr().err
+
+    def test_explicit_read_only_is_still_honoured(self, monkeypatch, capsys):
+        self._profile_for(monkeypatch, "read-only")
+        assert "Profile: read-only" in capsys.readouterr().err

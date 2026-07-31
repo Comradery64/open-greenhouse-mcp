@@ -14,8 +14,8 @@ from mcp.server.fastmcp import FastMCP
 
 from greenhouse_mcp.client import GreenhouseClient
 from greenhouse_mcp.errors import build_error, config_error, internal_error
-from greenhouse_mcp.shaping import shape_result
 from greenhouse_mcp.permissions import UserPermissions, resolve_user_permissions
+from greenhouse_mcp.shaping import shape_result
 
 load_dotenv()
 
@@ -154,6 +154,29 @@ _WEBHOOK_READ_TOOLS: set[str] = {
     "webhook_list_events",
 }
 
+# Curated slim tool set for the "assistant" profile — everyday recruiting
+# workflows (screening, triage, pipeline search/hygiene, notes/tags, and the
+# common pipeline-management writes), without the ~90 admin/config tools.
+_ASSISTANT_TOOLS: set[str] = {
+    # Composite workflow tools
+    "screen_candidate", "fetch_new_applications", "scan_pipeline_resumes",
+    "search_pipeline_candidates",
+    "pipeline_summary", "candidates_needing_action", "stale_applications",
+    "pipeline_metrics", "source_effectiveness", "time_to_hire",
+    # Core reads
+    "list_jobs", "get_job", "list_job_stages_for_job",
+    "list_applications", "get_application",
+    "list_candidates", "get_candidate",
+    "search_candidates_by_name", "search_candidates_by_email",
+    "read_candidate_resume", "download_attachment",
+    "list_scorecards_for_application", "get_scorecard", "get_activity_feed",
+    "list_rejection_reasons",
+    # Core pipeline writes
+    "advance_application", "reject_application", "unreject_application",
+    "add_note_to_candidate", "add_tag_to_candidate",
+    "bulk_reject", "bulk_advance", "bulk_tag",
+}
+
 # Method names that indicate a write operation
 _WRITE_METHODS: set[str] = {
     "harvest_post",
@@ -180,6 +203,8 @@ def _should_register(name: str, fn: Callable[..., Any], profile: str) -> bool:
         return True
     if profile == "read-only":
         return not _is_write_tool(fn)
+    if profile == "assistant":
+        return name in _ASSISTANT_TOOLS
     # recruiter: allow reads + approved write tools
     if _is_write_tool(fn):
         return name in _RECRUITER_WRITE_TOOLS
@@ -236,12 +261,21 @@ def create_server() -> FastMCP:
             f"Derived profile: {profile}{jobs_info}",
             file=sys.stderr,
         )
-    elif profile_raw in ("full", "recruiter", "read-only"):
+    elif profile_raw in ("full", "recruiter", "read-only", "assistant"):
         profile = profile_raw
     elif read_only:
         profile = "read-only"
     else:
-        profile = "full"
+        # Fall back to the recruiter-safe set, not "full". An unset or
+        # unrecognised value previously exposed every tool with writes enabled,
+        # including destructive ones — the wrong default when the operator has
+        # not chosen anything. An unsubstituted "${user_config.tool_profile}"
+        # placeholder from a packaged bundle lands here too.
+        profile = "assistant"
+        if profile_raw:
+            from greenhouse_mcp.diagnostics import record
+
+            record("unknown_tool_profile", requested=profile_raw, fell_back_to=profile)
 
     # --- Harvest tools ---
     from greenhouse_mcp.harvest import (
@@ -440,6 +474,10 @@ def create_server() -> FastMCP:
         for name, fn in inspect.getmembers(module, inspect.isfunction):
             if name.startswith("_") or not name.startswith("webhook_"):
                 continue
+            # The assistant profile is an explicit, curated list; webhook tools are
+            # not on it, and registering them anyway would silently widen it.
+            if profile == "assistant":
+                continue
             if profile != "full" and name not in _WEBHOOK_READ_TOOLS:
                 continue
 
@@ -472,7 +510,12 @@ def create_server() -> FastMCP:
         apis.append("job-board")
     if not apis:
         apis.append("none (tools registered, credentials needed at invocation)")
-    write_modes = {"full": "enabled", "recruiter": "recruiter-safe", "read-only": "disabled"}
+    write_modes = {
+        "full": "enabled",
+        "recruiter": "recruiter-safe",
+        "read-only": "disabled",
+        "assistant": "curated-safe",
+    }
     writes = write_modes.get(profile, "disabled")
 
     api_str = ", ".join(apis)
