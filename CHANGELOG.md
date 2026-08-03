@@ -1,9 +1,15 @@
 # Changelog
 
-## 0.5.0
+## 0.5.5
 
 Reliability and error-reporting pass, aimed at deployments where the end users
 are recruiters rather than engineers.
+
+> Versions 0.5.0 through 0.5.4 were never released. They were internal Claude
+> Desktop bundle builds: the admin console requires each upload to carry a version
+> strictly greater than the one already installed, so repacking during development
+> consumed those numbers. This release starts above them so the published package
+> and the bundle share one version from here on.
 
 ### Added
 - **Result-size shaping** — Tool results are now measured and kept within a size

@@ -1,7 +1,7 @@
 name: Release MCPB
 
 # Builds the Claude Desktop extension bundle (.mcpb) and attaches it to a GitHub
-# Release. Push a tag like v0.5.0 to cut a release, or run manually to produce a
+# Release. Push a tag like v0.5.5 to cut a release, or run manually to produce a
 # build artifact without publishing.
 #
 # One bundle serves every platform. It carries no interpreter and no compiled
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to stamp into manifest.json (e.g. 0.5.0)"
+        description: "Version to stamp into manifest.json (e.g. 0.5.5)"
         required: true
         type: string
 
