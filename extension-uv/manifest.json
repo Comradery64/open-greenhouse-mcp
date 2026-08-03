@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "greenhouse-mcp",
   "display_name": "Greenhouse MCP",
-  "version": "0.5.0",
+  "version": "0.5.5",
   "description": "Recruiting workflow tools for Greenhouse ATS (candidate screening, applications, pipeline search, resume scanning) inside Claude.",
   "long_description": "Curated Greenhouse recruiting tools for Claude: candidate screening, application triage, pipeline search, and resume scanning. Resumes are extracted to text server-side (PDF and DOCX) and candidate location is detected from several signals. The tool set is fixed to the recruiter-safe curated profile. Each user must enter their own personal Greenhouse Harvest API key below (issued per-person by your Greenhouse admin) \u2014 do not use a shared or team key.",
   "author": {

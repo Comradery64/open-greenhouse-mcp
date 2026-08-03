@@ -173,10 +173,10 @@ Structured JSON logging for observability. Set `GREENHOUSE_LOG_LEVEL=info` to en
 
 ## Changelog
 
-Current version: **0.5.0**. Full detail for every release lives in
+Current version: **0.5.5**. Full detail for every release lives in
 [CHANGELOG.md](CHANGELOG.md); this is the short version.
 
-### 0.5.0 — reliability and error reporting
+### 0.5.5 — reliability and error reporting
 
 Aimed at deployments where the people using the tools are recruiters, not
 engineers, so a failure has to be self-explanatory and reportable.
@@ -234,7 +234,7 @@ This project began as a fork of
 (MIT, Copyright © 2026 Ben Monopoli), which remains the origin of the great majority
 of this code. The `LICENSE` file is unchanged and continues to carry that notice.
 
-Changes made here, released as 0.5.0:
+Changes made here, released as 0.5.5:
 
 - Result-size shaping, so a large tool result is trimmed to fit rather than rejected
 - User-relayable error messages carrying a support code a non-technical user can pass on
