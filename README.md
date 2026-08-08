@@ -227,6 +227,19 @@ PyPI metadata: keywords, classifiers, and project URLs.
 
 Harvest, Job Board, and Ingestion API coverage.
 
+## Skills
+
+`skills/` holds the Claude skills that drive these tools for recruiters — application
+triage, candidate screening, pipeline search, and resume batch review. Skills are
+distributed separately from the extension bundle: upload each directory to Claude as
+a skill, alongside installing the `.mcpb`.
+
+They name MCP tools in prose, so a rename or a tool dropped from the bundle's pinned
+profile would break them silently, at the moment a recruiter tried to use one.
+`tests/test_skills.py` matches the registered tool set against each skill's text and
+fails the build instead. Cited tools are discovered from the files rather than a
+hardcoded list, so newly cited tools are covered automatically.
+
 ## Relationship to upstream
 
 This project began as a fork of
