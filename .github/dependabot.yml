@@ -8,6 +8,14 @@ updates:
       prefix: "deps"
     labels:
       - "dependencies"
+    ignore:
+      # mcp 2.0.0 removed mcp.server.fastmcp, which this server imports, so a
+      # major bump makes the package fail at import and the suite fail to
+      # collect. The upper bound in pyproject.toml is deliberate; supporting
+      # mcp 2.x needs a port to its replacement API, not a widened range.
+      # Without this, the same breaking PR is reopened every week.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
