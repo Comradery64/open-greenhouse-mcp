@@ -1,8 +1,16 @@
 name: Publish to PyPI
 
+# Manual only. This fired on every published release, and the release workflow
+# publishes one — so cutting a bundle release chained into a PyPI upload of
+# "open-greenhouse-mcp", a project owned upstream by Ben Monopoli. It could never
+# have succeeded (no PYPI_API_TOKEN is configured, and the name is not ours), so
+# the only effect was a failed job on every release, which trains people to ignore
+# red builds.
+#
+# Before using this: rename the distribution in pyproject.toml to a name you own,
+# and add a PYPI_API_TOKEN secret. Then consider restoring the release trigger.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   publish:
