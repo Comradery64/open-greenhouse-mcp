@@ -170,6 +170,7 @@ Structured JSON logging for observability. Set `GREENHOUSE_LOG_LEVEL=info` to en
 - **[Usage Examples](docs/examples.md)** — Real conversations with full output
 - **[Advanced Setup](docs/advanced.md)** — Webhook receiver, ingestion API, board-token mode
 - **[Development](docs/development.md)** — Contributing, testing, project structure
+- **[Harvest v3 migration](docs/harvest-v3-migration.md)** — **action required before 2026-08-31**: Harvest v1/v2 are removed, and every call here targets v1
 
 ## Changelog
 
