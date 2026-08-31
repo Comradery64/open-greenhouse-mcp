@@ -26,6 +26,12 @@ might be wrong.
 | A8 unmigrated tools withheld (181 → 60 registered) | `server.py` |
 | Mitigation: strict projection | `shaping.py`, `GREENHOUSE_STRICT_PROJECTION` |
 
+A second sweep on 2026-08-31 found 8 of the 33 curated tools still carrying v1
+assumptions that the strict-projection guard could not see, because the
+composites read API fields directly rather than through a projection. Notably a
+deactivated user could start the server, resumes could not be read at all, and
+every pipeline stage read as "Unknown". See the 0.6.0 changelog entry.
+
 Two renames the table below originally missed, found in the migration guide while
 implementing: `application_ids` and `applications[]` are **removed** from
 candidates, and `primary_email_address` → `primary_email` on users.
@@ -237,10 +243,11 @@ These gate everything and are not engineering work.
    not an assurance. Both were left on v1 and excluded from the v3 tool gate, so
    if this assumption is wrong those 19 tools break — loudly, with 404s, which is
    the acceptable failure. **Still worth confirming with Greenhouse support.**
-2. **Does `/jobs/{id}/stages` become `/v3/job_interview_stages`?** The guide shows
-   the top-level rename; the job-scoped variant needs confirming. **Unresolved** —
-   `list_job_stages_for_job` still calls the job-scoped path, so this is the most
-   likely first breakage. Check it first once credentials exist.
+2. ~~**Does `/jobs/{id}/stages` become `/v3/job_interview_stages`?**~~
+   **Resolved 2026-08-31.** Two independent signals: the scope Greenhouse grants
+   is named "Job interview stages", and the migration guide says resolving a
+   stage name requires that endpoint. All three callers were moved to
+   `/job_interview_stages?job_id=`.
 3. **Is there a v1 fallback window?** If v3 access can be obtained before the
    cutoff, running both briefly would de-risk the switch. Unknown whether both
    credential types can be active at once.

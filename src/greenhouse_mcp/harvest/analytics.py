@@ -11,6 +11,10 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from greenhouse_mcp.client import GreenhouseClient
+from greenhouse_mcp.harvest.job_stages import (
+    _stage_name,
+    _stage_names_for_job,
+)
 
 
 async def pipeline_metrics(
@@ -29,28 +33,35 @@ async def pipeline_metrics(
     now = datetime.now(timezone.utc)
 
     # Get stages
-    stages_result = await client.harvest_get(f"/jobs/{job_id}/stages", paginate="single")
+    stages_result = await client.harvest_get(
+        "/job_interview_stages",
+        params={"job_id": job_id, "per_page": 500},
+        paginate="single",
+    )
     stages_list = stages_result.get("items", [])
 
     errors: list[dict[str, Any]] = []
 
     # Get ALL applications (active + rejected + hired)
     all_apps: list[dict[str, Any]] = []
-    page = 1
+    cursor: str | None = None
     while True:
         result = await client.harvest_get(
             "/applications",
-            params={"job_id": job_id, "per_page": 500, "page": page},
+            params=None if cursor else {"job_id": job_id, "per_page": 500},
             paginate="single",
+            cursor=cursor,
         )
         if "error" in result and "status_code" in result:
-            errors.append({"step": "fetch_applications", "page": page, **result})
+            errors.append({"step": "fetch_applications", "paged": cursor is not None, **result})
             break
         items = result.get("items", [])
         all_apps.extend(items)
         if not result.get("has_next"):
             break
-        page += 1
+        cursor = result.get("next_cursor")
+        if not cursor:
+            break
 
     if not all_apps:
         return {
@@ -69,8 +80,11 @@ async def pipeline_metrics(
 
     time_in_stage_days: dict[str, list[float]] = {}
 
+    # v3: stage is no longer inline. One cached fetch for this job's stages.
+    stage_names = await _stage_names_for_job(client, job_id)
+
     for app in all_apps:
-        current_stage = (app.get("current_stage") or {}).get("name", "Unknown")
+        current_stage = _stage_name(app, stage_names)
 
         if app.get("status") == "rejected":
             rejected_count += 1
@@ -83,7 +97,7 @@ async def pipeline_metrics(
 
         # Time in current stage
         last_activity = app.get("last_activity_at", "")
-        applied_at = app.get("applied_at", "")
+        applied_at = app.get("created_at", "")
         if last_activity and applied_at:
             try:
                 applied_dt = datetime.fromisoformat(applied_at.replace("Z", "+00:00"))
@@ -155,18 +169,24 @@ async def source_effectiveness(
         params["created_after"] = created_after
 
     all_apps: list[dict[str, Any]] = []
-    page = 1
+    cursor: str | None = None
     while True:
-        params["page"] = page
-        result = await client.harvest_get("/applications", params=params, paginate="single")
+        result = await client.harvest_get(
+            "/applications",
+            params=None if cursor else params,
+            paginate="single",
+            cursor=cursor,
+        )
         if "error" in result and "status_code" in result:
-            errors.append({"step": "fetch_applications", "page": page, **result})
+            errors.append({"step": "fetch_applications", "paged": cursor is not None, **result})
             break
         items = result.get("items", [])
         all_apps.extend(items)
         if not result.get("has_next"):
             break
-        page += 1
+        cursor = result.get("next_cursor")
+        if not cursor:
+            break
 
     # Aggregate by source
     sources: dict[str, dict[str, int]] = {}
@@ -242,18 +262,24 @@ async def time_to_hire(
         params["created_after"] = created_after
 
     all_apps: list[dict[str, Any]] = []
-    page = 1
+    cursor: str | None = None
     while True:
-        params["page"] = page
-        result = await client.harvest_get("/applications", params=params, paginate="single")
+        result = await client.harvest_get(
+            "/applications",
+            params=None if cursor else params,
+            paginate="single",
+            cursor=cursor,
+        )
         if "error" in result and "status_code" in result:
-            errors.append({"step": "fetch_applications", "page": page, **result})
+            errors.append({"step": "fetch_applications", "paged": cursor is not None, **result})
             break
         items = result.get("items", [])
         all_apps.extend(items)
         if not result.get("has_next"):
             break
-        page += 1
+        cursor = result.get("next_cursor")
+        if not cursor:
+            break
 
     if not all_apps:
         return {
@@ -269,7 +295,7 @@ async def time_to_hire(
     hire_details: list[dict[str, Any]] = []
 
     for app in all_apps:
-        applied_at = app.get("applied_at", "")
+        applied_at = app.get("created_at", "")
         # Use last_activity as proxy for hire date
         hired_at = app.get("last_activity_at", "")
         if not applied_at or not hired_at:

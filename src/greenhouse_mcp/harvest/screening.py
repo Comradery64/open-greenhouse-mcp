@@ -15,6 +15,11 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from greenhouse_mcp.client import GreenhouseClient
+from greenhouse_mcp.harvest.attachments import (
+    _fetch_candidate_resumes,
+    _latest_resume,
+)
+from greenhouse_mcp.harvest.job_stages import _stage_name, _stage_names_for_apps
 from greenhouse_mcp.location import detect_candidate_location as _detect_candidate_location
 from greenhouse_mcp.resume_parser import extract_resume_text as _extract_resume_text
 
@@ -95,14 +100,14 @@ def _extract_screening_answers(application: dict[str, Any]) -> list[dict[str, st
     return results
 
 
-def _build_application_history(candidate: dict[str, Any]) -> dict[str, Any]:
+def _build_application_history(
+    applications: list[dict[str, Any]], stage_names: dict[int, str]
+) -> dict[str, Any]:
     """Build a summary of the candidate's application history.
 
     Counts applications by status, flags ``is_repeat_rejected`` when there are
     3+ rejections and 0 hires, and includes per-application details.
     """
-    applications = candidate.get("applications", [])
-
     rejected = 0
     hired = 0
     active = 0
@@ -125,15 +130,12 @@ def _build_application_history(candidate: dict[str, Any]) -> dict[str, Any]:
             rejection_reason_obj.get("name") if isinstance(rejection_reason_obj, dict) else None
         )
 
-        current_stage_obj = app.get("current_stage")
-        current_stage = (
-            current_stage_obj.get("name") if isinstance(current_stage_obj, dict) else None
-        )
+        current_stage = _stage_name(app, stage_names)
 
         prior.append(
             {
                 "job": job_name,
-                "applied": _format_date(app.get("applied_at")),
+                "applied": _format_date(app.get("created_at")),
                 "status": status,
                 "rejection_reason": rejection_reason,
                 "current_stage": current_stage,
@@ -177,6 +179,11 @@ async def screen_candidate(
 
     # Step b: Extract IDs
     candidate_id = application.get("candidate_id")
+    if candidate_id is None:
+        return {
+            "error": f"Application {application_id} carried no candidate_id.",
+            "detail": "Cannot assemble a screening package without a candidate.",
+        }
     jobs = application.get("jobs", [])
     job_id = jobs[0].get("id") if jobs else None
     job_name = jobs[0].get("name", "Unknown") if jobs else "Unknown"
@@ -208,10 +215,13 @@ async def screen_candidate(
     resume_filename = ""
     has_resume = False
 
-    attachments = candidate.get("attachments", [])
-    resume_attachments = [a for a in attachments if a.get("type") == "resume"]
+    # v3: attachments are no longer on the candidate — fetched per application.
+    found = await _fetch_candidate_resumes(client, candidate_id)
+    if "error" in found and "status_code" in found:
+        return found
+    resume_attachments = found["resumes"]
     if resume_attachments:
-        resume_att = resume_attachments[-1]  # Most recent
+        resume_att = _latest_resume(resume_attachments) or {}
         resume_filename = resume_att.get("filename", "")
         url = resume_att.get("url", "")
         if url:
@@ -242,7 +252,19 @@ async def screen_candidate(
     )
 
     # Step h: Build application history
-    application_history = _build_application_history(candidate)
+    # v3: applications are no longer nested on the candidate.
+    cand_apps = await client.harvest_get(
+        "/applications", params={"candidate_id": candidate_id, "per_page": 500}
+    )
+    if "error" in cand_apps and "status_code" in cand_apps:
+        return cand_apps
+    cand_app_items = cand_apps.get("items", [])
+    # Include the application being screened: its own stage must resolve even
+    # when the candidate has no other applications to borrow a job from.
+    history_stages = await _stage_names_for_apps(
+        client, [*cand_app_items, application]
+    )
+    application_history = _build_application_history(cand_app_items, history_stages)
 
     # Step i: Assemble contact info
     emails = candidate.get("email_addresses", [])
@@ -289,9 +311,9 @@ async def screen_candidate(
         },
         "application": {
             "id": application.get("id"),
-            "applied_at": _format_date(application.get("applied_at")),
+            "applied_at": _format_date(application.get("created_at")),
             "source": (application.get("source") or {}).get("public_name", "Unknown"),
-            "current_stage": (application.get("current_stage") or {}).get("name", "Unknown"),
+            "current_stage": _stage_name(application, history_stages),
             "status": application.get("status", ""),
         },
         "job": {
@@ -389,6 +411,9 @@ async def fetch_new_applications(
 
     applications = apps_result.get("items", [])
 
+    # v3: stage resolved from stage_id; one cached call per job involved.
+    stage_names = await _stage_names_for_apps(client, applications)
+
     # Step c: Group by job
     jobs_map: dict[str, dict[str, Any]] = {}
     for app in applications:
@@ -407,9 +432,9 @@ async def fetch_new_applications(
         entry: dict[str, Any] = {
             "application_id": app.get("id"),
             "candidate_id": app.get("candidate_id"),
-            "applied_at": _format_date(app.get("applied_at")),
+            "applied_at": _format_date(app.get("created_at")),
             "source": (app.get("source") or {}).get("public_name", "Unknown"),
-            "current_stage": (app.get("current_stage") or {}).get("name", "Unknown"),
+            "current_stage": _stage_name(app, stage_names),
             "screening_answers": _extract_screening_answers(app),
         }
         jobs_map[app_job_name]["candidates"].append(entry)

@@ -19,6 +19,71 @@ def client_credentials():
     }
 
 
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
+
+
+def mock_v3_side_calls(*, attachments=None, stages=None, applications=None):
+    """Register the extra endpoints Harvest v3 split out of inline fields.
+
+    v1 returned a candidate's attachments and an application's stage inline, so
+    no fixture ever had to mock them. Call this at the top of a test body (the
+    `@respx.mock` decorator clears anything registered outside it), and pass
+    real payloads only for the ones the test actually asserts on.
+
+    `applications` is separate because many tests already mock that path; leave
+    it None when they do, so the test's own route stays authoritative.
+    """
+    import httpx
+    import respx
+
+    respx.get(f"{HARVEST_BASE}/attachments").mock(
+        return_value=httpx.Response(200, json=attachments or [])
+    )
+    respx.get(f"{HARVEST_BASE}/job_interview_stages").mock(
+        return_value=httpx.Response(200, json=stages or [])
+    )
+    if applications is not None:
+        respx.get(f"{HARVEST_BASE}/applications").mock(
+            return_value=httpx.Response(200, json=applications)
+        )
+
+
+def mock_resume_chain(candidates, *, pipeline_applications=None, stages=None):
+    """Serve v3's candidate → applications → attachments chain.
+
+    Fixtures still carry `attachments` inline on the candidate, which is how v1
+    returned them and how they read most clearly. This derives the two extra
+    endpoints v3 requires from that same data, so a test states its candidates
+    once and does not have to hand-maintain three consistent payloads.
+
+    One synthetic application per candidate (`id * 10 + 1`) is enough: the code
+    under test only uses the id to look attachments up.
+    """
+    import httpx
+    import respx
+
+    app_for = {c["id"]: c["id"] * 10 + 1 for c in candidates if "id" in c}
+    atts_for = {app_for[c["id"]]: c.get("attachments", []) for c in candidates if "id" in c}
+
+    def _applications(request):
+        raw = request.url.params.get("candidate_id")
+        if raw is None:
+            # The tool's own pipeline query, not the per-candidate lookup.
+            return httpx.Response(200, json=pipeline_applications or [])
+        app_id = app_for.get(int(raw))
+        return httpx.Response(200, json=[{"id": app_id, "jobs": []}] if app_id else [])
+
+    def _attachments(request):
+        raw = request.url.params.get("application_id")
+        return httpx.Response(200, json=atts_for.get(int(raw), []) if raw else [])
+
+    respx.get(f"{HARVEST_BASE}/applications").mock(side_effect=_applications)
+    respx.get(f"{HARVEST_BASE}/attachments").mock(side_effect=_attachments)
+    respx.get(f"{HARVEST_BASE}/job_interview_stages").mock(
+        return_value=httpx.Response(200, json=stages or [])
+    )
+
+
 def primed_client(**kwargs):
     """A v3 client holding a valid token, so no token route need be mocked.
 
