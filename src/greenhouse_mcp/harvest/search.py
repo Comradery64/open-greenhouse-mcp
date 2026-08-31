@@ -32,17 +32,22 @@ async def search_candidates_by_name(
     """
     name_lower = name.lower().strip()
     matches: list[dict[str, Any]] = []
-    page = 1
+    cursor: str | None = None
+    pages = 0
 
-    while page <= max_pages:
+    while pages < max_pages:
+        # v3 rejects a cursor sent alongside per_page, so the size is set on the
+        # first request only and the cursor carries it thereafter.
         result = await client.harvest_get(
             "/candidates",
-            params={"per_page": per_page, "page": page},
+            params=None if cursor else {"per_page": per_page},
             paginate="single",
+            cursor=cursor,
         )
         if "error" in result and "status_code" in result:
             return result
 
+        pages += 1
         items = result.get("items", [])
         if not items:
             break
@@ -54,14 +59,14 @@ async def search_candidates_by_name(
             if name_lower in first or name_lower in last or name_lower in full:
                 matches.append(c)
 
-        if not result.get("has_next"):
+        cursor = result.get("next_cursor")
+        if not result.get("has_next") or not cursor:
             break
-        page += 1
 
     return {
         "matches": matches,
         "total_matches": len(matches),
-        "pages_scanned": page,
+        "pages_scanned": pages,
     }
 
 

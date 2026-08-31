@@ -34,7 +34,8 @@ Add to your MCP client config (Claude Desktop: `~/Library/Application Support/Cl
     "greenhouse": {
       "command": "open-greenhouse-mcp",
       "env": {
-        "GREENHOUSE_API_KEY": "your-harvest-api-key",
+        "GREENHOUSE_CLIENT_ID": "your-harvest-client-id",
+        "GREENHOUSE_CLIENT_SECRET": "your-harvest-client-secret",
         "GREENHOUSE_TOOL_PROFILE": "read-only"
       }
     }
@@ -44,7 +45,15 @@ Add to your MCP client config (Claude Desktop: `~/Library/Application Support/Cl
 
 Start in read-only mode to validate connectivity and tool behaviour, then switch to `recruiter` or `full` when you need write access.
 
-Your API key is in Greenhouse under Configure > Dev Center > API Credential Management.
+Your client ID and secret come from Greenhouse under Configure > Dev Center > API
+Credential Management, created by someone with *Can manage ALL organization's API
+Credentials*. Harvest v3 grants access **per endpoint**, so the credential needs
+scopes for the endpoints you intend to use.
+
+> **Harvest v3.** Harvest v1 and v2 became unavailable after 2026-08-31, so the
+> older per-person `GREENHOUSE_API_KEY` no longer opens Harvest. Tools not yet
+> verified against the v3 guides are withheld at startup rather than left
+> registered and broken — see [docs/harvest-v3-migration.md](docs/harvest-v3-migration.md).
 
 ## What You Can Ask
 
@@ -146,8 +155,13 @@ High-level tools that combine multiple API calls into single operations.
 
 | Variable | Required | Description |
 |---|---|---|
-| `GREENHOUSE_API_KEY` | Yes* | Harvest API key |
-| `GREENHOUSE_BOARD_TOKEN` | Yes* | Job board URL slug. *At least one required |
+| `GREENHOUSE_CLIENT_ID` | Yes* | Harvest v3 client ID |
+| `GREENHOUSE_CLIENT_SECRET` | Yes* | Harvest v3 client secret |
+| `GREENHOUSE_USER_ID` | No | Your Greenhouse user ID — attributes v3 calls and derives the tool profile |
+| `GREENHOUSE_BOARD_TOKEN` | Yes* | Job board URL slug. *Client credentials or a board token required |
+| `GREENHOUSE_API_KEY` | No | Legacy v1 key — Job Board / Ingestion APIs only, not Harvest |
+| `GREENHOUSE_ALLOW_UNMIGRATED_TOOLS` | No | Set `1` to register Harvest tools not yet verified against v3 |
+| `GREENHOUSE_STRICT_PROJECTION` | No | Set `1` to fail (not warn) when a payload field is missing |
 | `GREENHOUSE_TOOL_PROFILE` | No | `recruiter` (default), `read-only`, or `full` |
 | `GREENHOUSE_ON_BEHALF_OF` | No | Greenhouse user ID for write audit trail |
 | `GREENHOUSE_LOG_LEVEL` | No | `debug`, `info`, `warning` (default), `error` |
@@ -170,7 +184,7 @@ Structured JSON logging for observability. Set `GREENHOUSE_LOG_LEVEL=info` to en
 - **[Usage Examples](docs/examples.md)** — Real conversations with full output
 - **[Advanced Setup](docs/advanced.md)** — Webhook receiver, ingestion API, board-token mode
 - **[Development](docs/development.md)** — Contributing, testing, project structure
-- **[Harvest v3 migration](docs/harvest-v3-migration.md)** — **action required before 2026-08-31**: Harvest v1/v2 are removed, and every call here targets v1
+- **[Harvest v3 migration](docs/harvest-v3-migration.md)** — Phase A is implemented but **not yet verified against a live Greenhouse instance**; Phase B tools stay withheld until they are
 
 ## Changelog
 

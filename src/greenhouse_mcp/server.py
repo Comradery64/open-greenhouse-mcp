@@ -52,18 +52,26 @@ def get_client() -> GreenhouseClient:
     api_key = os.environ.get("GREENHOUSE_API_KEY")
     board_token = os.environ.get("GREENHOUSE_BOARD_TOKEN")
     on_behalf_of = os.environ.get("GREENHOUSE_ON_BEHALF_OF")
+    client_id = os.environ.get("GREENHOUSE_CLIENT_ID")
+    client_secret = os.environ.get("GREENHOUSE_CLIENT_SECRET")
+    user_id = os.environ.get("GREENHOUSE_USER_ID")
 
-    if not api_key and not board_token:
+    if not (client_id and client_secret) and not board_token:
         raise ValueError(
-            "At least one of GREENHOUSE_API_KEY or GREENHOUSE_BOARD_TOKEN is required.\n"
-            "Harvest API key: Configure > Dev Center > API Credential Management in Greenhouse.\n"
-            "Board token: your public job board URL slug."
+            "Harvest v3 requires GREENHOUSE_CLIENT_ID and GREENHOUSE_CLIENT_SECRET.\n"
+            "Ask your Greenhouse admin to create API credentials: Configure > Dev Center >\n"
+            "API Credential Management. GREENHOUSE_API_KEY was for Harvest v1, which\n"
+            "Greenhouse switched off after 2026-08-31 and which no longer works.\n"
+            "Board token (public job board only): your job board URL slug."
         )
 
     _client = GreenhouseClient(
         api_key=api_key,
         board_token=board_token,
         on_behalf_of=on_behalf_of,
+        client_id=client_id,
+        client_secret=client_secret,
+        user_id=user_id,
     )
     return _client
 
@@ -188,6 +196,35 @@ _WRITE_METHODS: set[str] = {
 }
 
 
+# Tools whose Harvest endpoints and fields have been reviewed against the v3
+# migration guides. Everything else is withheld rather than left registered and
+# broken: an unmigrated tool against v3 either 404s or — worse — returns a payload
+# whose renamed fields read as absent, which looks like a real but empty answer.
+# Phase B moves names into this set module by module. See
+# docs/harvest-v3-migration.md.
+_V3_MIGRATED_TOOLS: set[str] = set(_ASSISTANT_TOOLS)
+
+# Job Board and Ingestion are separate products on their own v1 paths and were not
+# part of the Harvest sunset, so their tools are unaffected by the allowlist.
+_NON_HARVEST_MODULE_PREFIXES = ("greenhouse_mcp.job_board", "greenhouse_mcp.ingestion")
+
+
+def _v3_gate_enabled() -> bool:
+    """Whether to withhold tools not yet migrated to Harvest v3.
+
+    On by default. `GREENHOUSE_ALLOW_UNMIGRATED_TOOLS=1` restores the full set for
+    someone doing Phase B work who needs an unmigrated tool to fail visibly.
+    """
+    return os.environ.get("GREENHOUSE_ALLOW_UNMIGRATED_TOOLS", "").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _is_harvest_tool(fn: Callable[..., Any]) -> bool:
+    module = getattr(fn, "__module__", "") or ""
+    return not module.startswith(_NON_HARVEST_MODULE_PREFIXES)
+
+
 def _is_write_tool(fn: Callable[..., Any]) -> bool:
     """Check if a tool function calls any write client methods."""
     try:
@@ -199,6 +236,10 @@ def _is_write_tool(fn: Callable[..., Any]) -> bool:
 
 def _should_register(name: str, fn: Callable[..., Any], profile: str) -> bool:
     """Decide whether a tool should be registered based on the active profile."""
+    # The v3 gate sits above the profiles: a tool that would return wrong data is
+    # withheld even from "full", which otherwise registers everything.
+    if _v3_gate_enabled() and _is_harvest_tool(fn) and name not in _V3_MIGRATED_TOOLS:
+        return False
     if profile == "full":
         return True
     if profile == "read-only":

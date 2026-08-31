@@ -13,7 +13,16 @@ async def list_candidates(
     client: GreenhouseClient,
     *,
     per_page: Annotated[int, Field(description="Results per page (max 500)")] = 500,
-    page: Annotated[int, Field(description="Page number (starts at 1)")] = 1,
+    cursor: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Opaque cursor from a previous call's `next_cursor`, to fetch the "
+                "next page. When set, all other filters are ignored — they are "
+                "already baked into the cursor."
+            )
+        ),
+    ] = None,
     email: Annotated[str | None, Field(description="Filter by exact email address")] = None,
     candidate_ids: Annotated[
         list[int] | None, Field(description="Filter to specific candidate IDs")
@@ -41,7 +50,7 @@ async def list_candidates(
     for bulk operations: date-range queries, fetching by specific IDs, or
     paginating through the full database.
     """
-    params: dict[str, Any] = {"per_page": per_page, "page": page}
+    params: dict[str, Any] = {"per_page": per_page}
     if email is not None:
         params["email"] = email
     if candidate_ids is not None:
@@ -54,7 +63,7 @@ async def list_candidates(
         params["updated_after"] = updated_after
     if updated_before is not None:
         params["updated_before"] = updated_before
-    return await client.harvest_get("/candidates", params=params, paginate=paginate)
+    return await client.harvest_get("/candidates", params=params, paginate=paginate, cursor=cursor)
 
 
 async def get_candidate(

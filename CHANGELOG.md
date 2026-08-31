@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.6.0
+
+Harvest v3 migration, Phase A. Harvest v1 and v2 became unavailable after
+2026-08-31, so this release is required for the server to function at all.
+
+**Not yet verified against a live Greenhouse instance.** Every endpoint is
+checked against the migration guides only; no v3 credentials existed when this
+was written. See `docs/harvest-v3-migration.md` before rolling it out.
+
+### Changed — breaking
+- **Credentials.** Harvest now uses OAuth client credentials:
+  `GREENHOUSE_CLIENT_ID` and `GREENHOUSE_CLIENT_SECRET` replace
+  `GREENHOUSE_API_KEY`, which no longer opens Harvest and is kept only for the
+  Job Board and Ingestion APIs. Tokens are fetched from
+  `auth.greenhouse.io/token`, cached against `expires_in` with a safety margin,
+  and refreshed once on a 401. Credentials are scoped **per endpoint** in v3, so
+  a credential that works for one tool may 403 on another.
+- **Paging.** `page` is replaced by an opaque `cursor` on the migrated list
+  tools. A cursor is sent as the sole query parameter — v3 returns 422 if it is
+  combined with filters or `per_page`. Results now carry `next_cursor` instead
+  of `next_page`, and the shaping note tells the model to resume with the cursor
+  rather than to increment a page number.
+- **Unmigrated tools are withheld.** Only Harvest tools verified against the v3
+  guides are registered: 60 of 181, including all Job Board and Ingestion tools,
+  which are separate products unaffected by the sunset. A caller reaching for
+  anything else gets "no such tool" rather than a plausible-looking wrong
+  answer. `GREENHOUSE_ALLOW_UNMIGRATED_TOOLS=1` restores the full set for Phase
+  B work.
+- **Field names in `shaping.py`** follow v3: `applied_at`→`created_at`,
+  `credited_to`→`referrer_id`, `submitted_by`→`submitter_id`,
+  `overall_recommendation`→`candidate_rating`, `departments[]`→`department_id`,
+  `offices[]`→`office_ids[]`. `current_stage`, `attachments`, `application_ids`
+  and `applications[]` are no longer returned inline and have been dropped from
+  the projections.
+
+### Added
+- **Strict projection**, the guard that makes the rest of this verifiable. A
+  projected field absent from *every* record in a page is a schema mismatch, not
+  optional data: it now raises under `GREENHOUSE_STRICT_PROJECTION=1` (CI) and
+  attaches a `schema_warning` to the result otherwise. Without it a renamed
+  field simply vanished from every record, so a half-migrated server returned
+  short, plausible, quietly incomplete answers.
+
+
 ## 0.5.5
 
 Reliability and error-reporting pass, aimed at deployments where the end users

@@ -9,7 +9,7 @@ from greenhouse_mcp.permissions import resolve_user_permissions
 class TestResolveUserPermissions:
     @pytest.mark.asyncio
     async def test_site_admin_gets_full(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v1/users/123").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users/123").mock(
             return_value=Response(200, json={
                 "id": 123,
                 "name": "Admin User",
@@ -28,7 +28,7 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_job_admin_gets_recruiter(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v1/users/456").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users/456").mock(
             return_value=Response(200, json={
                 "id": 456,
                 "name": "Recruiter User",
@@ -37,7 +37,7 @@ class TestResolveUserPermissions:
                 "primary_email_address": "recruiter@co.com",
             })
         )
-        mock_api.get("https://harvest.greenhouse.io/v1/users/456/permissions/jobs").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users/456/permissions/jobs").mock(
             return_value=Response(200, json=[
                 {"id": 1001, "job_id": 5001, "user_role_id": 4009207},
                 {"id": 1002, "job_id": 5002, "user_role_id": 4009207},
@@ -52,7 +52,7 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_no_permissions_gets_read_only(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v1/users/789").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users/789").mock(
             return_value=Response(200, json={
                 "id": 789,
                 "name": "Viewer User",
@@ -61,7 +61,7 @@ class TestResolveUserPermissions:
                 "primary_email_address": "viewer@co.com",
             })
         )
-        mock_api.get("https://harvest.greenhouse.io/v1/users/789/permissions/jobs").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users/789/permissions/jobs").mock(
             return_value=Response(200, json=[])
         )
 
@@ -72,7 +72,7 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_disabled_user_raises(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v1/users/999").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users/999").mock(
             return_value=Response(200, json={
                 "id": 999,
                 "name": "Disabled User",
@@ -87,7 +87,7 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_user_not_found_raises(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v1/users/0").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users/0").mock(
             return_value=Response(404, json={"message": "Resource not found"})
         )
 

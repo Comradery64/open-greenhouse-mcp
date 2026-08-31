@@ -1,12 +1,34 @@
 # Harvest v3 migration — handoff
 
-**Status:** not started. Every Harvest call in this repo targets `v1`.
+**Status:** Phase A implemented, **not verified against a live Greenhouse instance.**
 **Hard deadline:** Harvest **v1 and v2** are unavailable after **2026-08-31**.
-**Written:** 2026-08-18 (13 days out).
+**Written:** 2026-08-18. **Phase A implemented:** 2026-08-30.
 
-Without this work the server stops functioning on 2026-09-01. It will not degrade
-gracefully — see [Silent failure mode](#silent-failure-mode), which is the reason
-this cannot be a partial job.
+Every Harvest call now targets `v3` with OAuth client credentials and cursor
+paging, and the 33 curated tools have had their paths and fields checked against
+the migration guides. What has *not* happened is a single real request: no v3
+credentials existed when this was written, so every endpoint below is verified
+only against the documentation, not against Greenhouse.
+
+**Before trusting this in front of a recruiter**, get credentials and run the
+[Verification](#verification) steps. A green test suite is not evidence — the
+fixtures assert the contract as documented, which is exactly the thing that
+might be wrong.
+
+### What Phase A changed
+
+| Item | Where |
+|---|---|
+| A2 token auth (`client_credentials`, cached, refresh-on-401) | `client.py` |
+| A3 cursor paging; `page` removed from the migrated tools | `client.py`, `harvest/{jobs,applications,candidates,rejection_reasons,search}.py` |
+| A5 base URL → `/v3` | `client.py` |
+| A7 field renames | `shaping.py` |
+| A8 unmigrated tools withheld (181 → 60 registered) | `server.py` |
+| Mitigation: strict projection | `shaping.py`, `GREENHOUSE_STRICT_PROJECTION` |
+
+Two renames the table below originally missed, found in the migration guide while
+implementing: `application_ids` and `applications[]` are **removed** from
+candidates, and `primary_email_address` → `primary_email` on users.
 
 ## Plan
 
@@ -209,10 +231,16 @@ These gate everything and are not engineering work.
 1. **Are the Job Board and Ingestion APIs affected?** `BOARD_BASE`
    (`boards-api.greenhouse.io/v1/boards`, 13 tools) and `INGESTION_BASE`
    (`api.greenhouse.io/v1/partner`, 6 tools) are separate products that also carry
-   `/v1` in the path. The sunset notice names Harvest only. **Unverified** — confirm
-   before assuming either is safe.
+   `/v1` in the path. Re-read 2026-08-30: the Harvest API overview says only
+   "Harvest API v1 and v2 will be deprecated and unavailable after August 31,
+   2026" and does not mention either product. That is an *absence* of a notice,
+   not an assurance. Both were left on v1 and excluded from the v3 tool gate, so
+   if this assumption is wrong those 19 tools break — loudly, with 404s, which is
+   the acceptable failure. **Still worth confirming with Greenhouse support.**
 2. **Does `/jobs/{id}/stages` become `/v3/job_interview_stages`?** The guide shows
-   the top-level rename; the job-scoped variant needs confirming.
+   the top-level rename; the job-scoped variant needs confirming. **Unresolved** —
+   `list_job_stages_for_job` still calls the job-scoped path, so this is the most
+   likely first breakage. Check it first once credentials exist.
 3. **Is there a v1 fallback window?** If v3 access can be obtained before the
    cutoff, running both briefly would de-risk the switch. Unknown whether both
    credential types can be active at once.

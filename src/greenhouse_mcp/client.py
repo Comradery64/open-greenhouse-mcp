@@ -11,13 +11,18 @@ import random
 import re
 import time
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 
 from greenhouse_mcp.errors import build_error
 from greenhouse_mcp.logging import log_api_call
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+# Harvest v3. v1 and v2 are unavailable after 2026-08-31; see
+# docs/harvest-v3-migration.md. Job Board and Ingestion are separate products that
+# were not part of the Harvest sunset and stay on their own v1 paths.
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
+HARVEST_TOKEN_URL = "https://auth.greenhouse.io/token"
 BOARD_BASE = "https://boards-api.greenhouse.io/v1/boards"
 INGESTION_BASE = "https://api.greenhouse.io/v1/partner"
 
@@ -25,7 +30,36 @@ _CACHE_TTL = 300  # 5 minutes
 _MAX_RETRIES = 3
 _INTER_PAGE_DELAY = 0.2  # seconds
 
+# Refresh this far before the token actually expires, so a request never leaves
+# with a credential that dies in flight.
+_TOKEN_SAFETY_MARGIN = 60  # seconds
+
 _LINK_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
+_CURSOR_RE = re.compile(r'[?&]cursor=([^&]+)')
+
+
+def _cursor_from_url(url: str | None) -> str | None:
+    """Pull the opaque `cursor` value out of a server-issued next-page URL.
+
+    The cursor is handed back to the model rather than the whole URL, so a
+    resumed call goes through the same endpoint and auth as the first one.
+    """
+    if not url:
+        return None
+    m = _CURSOR_RE.search(url)
+    return unquote(m.group(1)) if m else None
+
+
+class _TokenError(Exception):
+    """Internal: token acquisition failed, carrying the dict to return instead.
+
+    Never escapes the client — every Harvest entry point converts it back into
+    the structured error dict the LLM expects.
+    """
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__(payload.get("error", "token error"))
+        self.payload = payload
 
 
 class GreenhouseClient:
@@ -37,15 +71,31 @@ class GreenhouseClient:
         api_key: str | None = None,
         board_token: str | None = None,
         on_behalf_of: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        user_id: str | None = None,
     ) -> None:
-        if api_key is None and board_token is None:
-            raise ValueError("Either api_key or board_token must be provided.")
+        has_harvest = client_id is not None and client_secret is not None
+        if not has_harvest and board_token is None and api_key is None:
+            raise ValueError(
+                "Harvest v3 needs client_id and client_secret; "
+                "otherwise provide board_token for the public Job Board."
+            )
+        # v1-only. Harvest no longer accepts it — retained for the Job Board and
+        # Ingestion APIs, which were not part of the Harvest sunset.
         self.api_key = api_key
         self.board_token = board_token
         self.on_behalf_of = on_behalf_of
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.user_id = user_id
         self._http_client: httpx.AsyncClient | None = None
         # in-memory TTL cache: cache_key -> (data, expires_at)
         self._cache: dict[str, tuple[Any, float]] = {}
+        # OAuth access token for Harvest v3, with its monotonic expiry.
+        self._token: str | None = None
+        self._token_expires_at: float = 0.0
+        self._token_lock = asyncio.Lock()
 
     def set_on_behalf_of(self, user_id: str) -> None:
         """Set the On-Behalf-Of user ID for write operation audit trail."""
@@ -64,22 +114,103 @@ class GreenhouseClient:
             )
         return self._http_client
 
-    def _harvest_auth_header(self) -> dict[str, str]:
+    def _basic_auth_header(self) -> dict[str, str]:
+        """Basic auth for the v1 Job Board and Ingestion APIs.
+
+        Harvest v3 does not accept this — see `_bearer_header`.
+        """
         if self.api_key is None:
             return {}
         token = base64.b64encode(f"{self.api_key}:".encode()).decode()
         return {"Authorization": f"Basic {token}"}
 
-    def _harvest_write_headers(self) -> dict[str, str]:
-        """Auth header + On-Behalf-Of for write operations (POST/PATCH/PUT/DELETE)."""
-        headers = self._harvest_auth_header()
+    def _ingestion_headers(self) -> dict[str, str]:
+        headers = self._basic_auth_header()
         if self.on_behalf_of:
             headers["On-Behalf-Of"] = self.on_behalf_of
         return headers
 
-    def _ingestion_headers(self) -> dict[str, str]:
-        headers = self._harvest_auth_header()
-        if self.on_behalf_of:
+    # ------------------------------------------------------------------
+    # Harvest v3 OAuth
+    # ------------------------------------------------------------------
+
+    def invalidate_token(self) -> None:
+        """Drop the cached access token so the next call fetches a fresh one."""
+        self._token = None
+        self._token_expires_at = 0.0
+
+    async def _bearer_header(self) -> dict[str, str]:
+        """Return the Harvest v3 Authorization header, fetching a token if needed.
+
+        Raises `_TokenError` carrying a relayable error dict; callers convert it
+        rather than letting an exception reach the LLM.
+        """
+        token = await self._access_token()
+        return {"Authorization": f"Bearer {token}"}
+
+    async def _access_token(self) -> str:
+        if self.client_id is None or self.client_secret is None:
+            raise _TokenError(
+                self._error_dict(
+                    401,
+                    "Harvest v3 requires a client ID and secret. Ask your Greenhouse "
+                    "admin for API credentials and set greenhouse_client_id and "
+                    "greenhouse_client_secret.",
+                    "/token",
+                )
+            )
+        # Serialised so a burst of concurrent calls fetches one token, not N.
+        async with self._token_lock:
+            if self._token is not None and time.monotonic() < self._token_expires_at:
+                return self._token
+            return await self._fetch_token()
+
+    async def _fetch_token(self) -> str:
+        """POST the client-credentials grant. Caller must hold `_token_lock`."""
+        http = self._get_http_client()
+        basic = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
+        data = {"grant_type": "client_credentials"}
+        if self.user_id:
+            data["sub"] = self.user_id
+        start = time.monotonic()
+        try:
+            resp = await http.post(
+                HARVEST_TOKEN_URL,
+                headers={
+                    "Authorization": f"Basic {basic}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data=data,
+            )
+        except Exception as e:
+            raise _TokenError(self._error_dict(0, f"Token request failed: {e}", "/token")) from e
+
+        # Logged by fixed label, never by URL or body — the request carries the
+        # client secret and the response carries the access token.
+        log_api_call(method="POST", url="/token", status=resp.status_code, start_time=start)
+        if resp.status_code >= 400:
+            raise _TokenError(self._error_dict(resp.status_code, None, "/token"))
+
+        body = self._parse_body(resp)
+        token = body.get("access_token") if isinstance(body, dict) else None
+        if not token:
+            raise _TokenError(
+                self._error_dict(502, "Token response contained no access_token.", "/token")
+            )
+        expires_in: Any = body.get("expires_in") if isinstance(body, dict) else None
+        try:
+            lifetime = float(expires_in)
+        except (TypeError, ValueError):
+            # A token with no usable lifetime still works; assume an hour and let
+            # the 401-refresh path catch it if that guess is wrong.
+            lifetime = 3600.0
+        self._token = str(token)
+        self._token_expires_at = time.monotonic() + max(lifetime - _TOKEN_SAFETY_MARGIN, 0.0)
+        return self._token
+
+    async def _harvest_headers(self, *, write: bool = False) -> dict[str, str]:
+        headers = await self._bearer_header()
+        if write and self.on_behalf_of:
             headers["On-Behalf-Of"] = self.on_behalf_of
         return headers
 
@@ -161,18 +292,55 @@ class GreenhouseClient:
         return self._parse_body(resp)  # type: ignore[no-any-return]
 
     # ------------------------------------------------------------------
-    # Paginated GET helper
+    # Harvest v3 request wrapper (token refresh on 401)
+    # ------------------------------------------------------------------
+
+    async def _harvest_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        write: bool = False,
+    ) -> httpx.Response:
+        """Harvest request that refreshes an expired token once and retries.
+
+        Extends the existing retry path rather than adding a second mechanism:
+        `_request` still owns 429/Retry-After, this owns 401/token.
+        """
+        headers = await self._harvest_headers(write=write)
+        resp = await self._request(method, url, headers=headers, params=params, json=json)
+        if resp.status_code == 401:
+            # The token was accepted when issued, so a 401 means it expired early
+            # or was revoked. One clean retry; a second 401 is a real auth failure.
+            self.invalidate_token()
+            headers = await self._harvest_headers(write=write)
+            resp = await self._request(method, url, headers=headers, params=params, json=json)
+        return resp
+
+    # ------------------------------------------------------------------
+    # Paginated GET helper (v3 cursor paging)
     # ------------------------------------------------------------------
 
     async def _paginated_get(
         self,
         url: str,
         *,
-        headers: dict[str, str] | None = None,
         params: dict[str, Any] | None = None,
         paginate: str = "single",
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        resp = await self._request("GET", url, headers=headers, params=params)
+        """GET one page (or all pages) of a Harvest v3 collection.
+
+        v3 rejects a `cursor` combined with any other query parameter (422), so a
+        cursor request sends the cursor alone and drops the caller's filters —
+        they are already baked into the cursor the server issued.
+        """
+        if cursor:
+            resp = await self._harvest_request("GET", url, params={"cursor": cursor})
+        else:
+            resp = await self._harvest_request("GET", url, params=params)
         parsed = self._handle_response(resp)
 
         if self._is_error(parsed):
@@ -181,14 +349,19 @@ class GreenhouseClient:
         if paginate == "single":
             next_url = self._parse_next_link(resp.headers.get("link"))
             items = parsed if isinstance(parsed, list) else [parsed]
-            return {"items": items, "has_next": next_url is not None, "next_page": next_url}
+            return {
+                "items": items,
+                "has_next": next_url is not None,
+                "next_cursor": _cursor_from_url(next_url),
+            }
 
-        # paginate="all" — follow all next links
+        # paginate="all" — follow the server's next links. The next URL already
+        # carries the cursor and must be re-requested with no extra params.
         all_items: list[Any] = parsed if isinstance(parsed, list) else [parsed]
         next_url = self._parse_next_link(resp.headers.get("link"))
         while next_url:
             await asyncio.sleep(_INTER_PAGE_DELAY)
-            resp = await self._request("GET", next_url, headers=headers)
+            resp = await self._harvest_request("GET", next_url)
             parsed = self._handle_response(resp)
             if self._is_error(parsed):
                 break
@@ -207,11 +380,15 @@ class GreenhouseClient:
         endpoint: str,
         params: dict[str, Any] | None = None,
         paginate: str = "single",
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         url = f"{HARVEST_BASE}{endpoint}"
-        return await self._paginated_get(
-            url, headers=self._harvest_auth_header(), params=params, paginate=paginate
-        )
+        try:
+            return await self._paginated_get(
+                url, params=params, paginate=paginate, cursor=cursor
+            )
+        except _TokenError as e:
+            return e.payload
 
     async def harvest_get_one(
         self,
@@ -219,49 +396,52 @@ class GreenhouseClient:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Harvest GET for a single resource — returns the object directly."""
-        url = f"{HARVEST_BASE}{endpoint}"
-        resp = await self._request("GET", url, headers=self._harvest_auth_header(), params=params)
-        return self._handle_response(resp)
+        return await self._harvest_simple("GET", endpoint, params=params)
 
     async def harvest_post(
         self,
         endpoint: str,
         json_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        url = f"{HARVEST_BASE}{endpoint}"
-        resp = await self._request(
-            "POST", url, headers=self._harvest_write_headers(), json=json_data
-        )
-        return self._handle_response(resp)
+        return await self._harvest_simple("POST", endpoint, json=json_data, write=True)
 
     async def harvest_patch(
         self,
         endpoint: str,
         json_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        url = f"{HARVEST_BASE}{endpoint}"
-        resp = await self._request(
-            "PATCH", url, headers=self._harvest_write_headers(), json=json_data
-        )
-        return self._handle_response(resp)
+        return await self._harvest_simple("PATCH", endpoint, json=json_data, write=True)
 
     async def harvest_delete(
         self,
         endpoint: str,
     ) -> dict[str, Any]:
-        url = f"{HARVEST_BASE}{endpoint}"
-        resp = await self._request("DELETE", url, headers=self._harvest_write_headers())
-        return self._handle_response(resp)
+        return await self._harvest_simple("DELETE", endpoint, write=True)
 
     async def harvest_put(
         self,
         endpoint: str,
         json_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        return await self._harvest_simple("PUT", endpoint, json=json_data, write=True)
+
+    async def _harvest_simple(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        write: bool = False,
+    ) -> dict[str, Any]:
+        """Single non-paginated Harvest call, with token errors converted."""
         url = f"{HARVEST_BASE}{endpoint}"
-        resp = await self._request(
-            "PUT", url, headers=self._harvest_write_headers(), json=json_data
-        )
+        try:
+            resp = await self._harvest_request(
+                method, url, params=params, json=json, write=write
+            )
+        except _TokenError as e:
+            return e.payload
         return self._handle_response(resp)
 
     async def harvest_get_cached(
@@ -270,10 +450,11 @@ class GreenhouseClient:
         params: dict[str, Any] | None = None,
         paginate: str = "single",
         force_refresh: bool = False,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         url = f"{HARVEST_BASE}{endpoint}"
         sorted_params = sorted((params or {}).items())
-        cache_key = f"GET:{url}:{sorted_params}:{paginate}"
+        cache_key = f"GET:{url}:{sorted_params}:{paginate}:{cursor or ''}"
         now = time.monotonic()
 
         if not force_refresh and cache_key in self._cache:
@@ -281,7 +462,9 @@ class GreenhouseClient:
             if now < expires_at:
                 return data  # type: ignore[no-any-return]
 
-        result = await self.harvest_get(endpoint, params=params, paginate=paginate)
+        result = await self.harvest_get(
+            endpoint, params=params, paginate=paginate, cursor=cursor
+        )
 
         # Only cache successful responses
         if not self._is_error(result):
@@ -310,7 +493,7 @@ class GreenhouseClient:
     ) -> dict[str, Any]:
         """Job Board POST — uses Harvest auth if api_key is set."""
         url = f"{BOARD_BASE}/{self.board_token}{endpoint}"
-        resp = await self._request("POST", url, headers=self._harvest_auth_header(), json=json_data)
+        resp = await self._request("POST", url, headers=self._basic_auth_header(), json=json_data)
         return self._handle_response(resp)
 
     # ------------------------------------------------------------------
