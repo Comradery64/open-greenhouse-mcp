@@ -13,7 +13,16 @@ async def list_jobs(
     client: GreenhouseClient,
     *,
     per_page: Annotated[int, Field(description="Results per page (max 500)")] = 500,
-    page: Annotated[int, Field(description="Page number (starts at 1)")] = 1,
+    cursor: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Opaque cursor from a previous call's `next_cursor`, to fetch the "
+                "next page. When set, all other filters are ignored — they are "
+                "already baked into the cursor."
+            )
+        ),
+    ] = None,
     status: Annotated[
         str | None, Field(description="Filter by status: 'open', 'closed', or 'draft'")
     ] = None,
@@ -39,7 +48,7 @@ async def list_jobs(
     (list_departments), or office_id (list_offices). For pipeline views, use
     pipeline_summary with the job_id.
     """
-    params: dict[str, Any] = {"per_page": per_page, "page": page}
+    params: dict[str, Any] = {"per_page": per_page}
     if status is not None:
         params["status"] = status
     if department_id is not None:
@@ -50,7 +59,7 @@ async def list_jobs(
         params["created_after"] = created_after
     if created_before is not None:
         params["created_before"] = created_before
-    return await client.harvest_get("/jobs", params=params, paginate=paginate)
+    return await client.harvest_get("/jobs", params=params, paginate=paginate, cursor=cursor)
 
 
 async def get_job(

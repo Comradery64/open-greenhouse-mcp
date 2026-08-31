@@ -6,13 +6,14 @@ import pytest
 import respx
 
 from greenhouse_mcp.client import GreenhouseClient
+from tests.conftest import primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 # ---------------------------------------------------------------------------

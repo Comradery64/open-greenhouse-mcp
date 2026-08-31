@@ -11,7 +11,7 @@ import pytest
 
 from greenhouse_mcp.client import GreenhouseClient
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 BOARD_BASE = "https://boards-api.greenhouse.io/v1/boards"
 INGESTION_BASE = "https://api.greenhouse.io/v1/partner"
 
@@ -32,12 +32,12 @@ def _basic_auth(api_key: str) -> str:
 
 class TestClientInit:
     def test_requires_credentials(self):
-        with pytest.raises(ValueError, match="api_key.*board_token|board_token.*api_key"):
+        with pytest.raises(ValueError, match="client_id|board_token"):
             GreenhouseClient()
 
-    def test_api_key_only(self):
-        c = GreenhouseClient(api_key="key-abc")
-        assert c.api_key == "key-abc"
+    def test_client_credentials_only(self):
+        c = GreenhouseClient(client_id="cid", client_secret="secret")
+        assert c.client_id == "cid"
         assert c.board_token is None
 
     def test_board_token_only(self):
@@ -46,8 +46,8 @@ class TestClientInit:
         assert c.api_key is None
 
     def test_both_credentials_allowed(self):
-        c = GreenhouseClient(api_key="k", board_token="t")
-        assert c.api_key == "k"
+        c = GreenhouseClient(client_id="cid", client_secret="s", board_token="t")
+        assert c.client_id == "cid"
         assert c.board_token == "t"
 
 
@@ -57,14 +57,14 @@ class TestClientInit:
 
 class TestHarvestAuth:
     @pytest.mark.asyncio
-    async def test_get_sends_basic_auth(self, client, api_key, mock_api):
+    async def test_get_sends_bearer_token(self, client, api_key, mock_api):
         route = mock_api.get(f"{HARVEST_BASE}/candidates").mock(
             return_value=httpx.Response(200, json=[{"id": 1}])
         )
         result = await client.harvest_get("/candidates")
         assert route.called
         auth_header = route.calls[0].request.headers.get("authorization")
-        assert auth_header == _basic_auth(api_key)
+        assert auth_header == "Bearer test-access-token"
         assert result["items"] == [{"id": 1}]
 
     @pytest.mark.asyncio
@@ -85,7 +85,7 @@ class TestHarvestAuth:
         assert route.called
         assert result == {"id": 99}
         auth_header = route.calls[0].request.headers.get("authorization")
-        assert auth_header == _basic_auth(api_key)
+        assert auth_header == "Bearer test-access-token"
 
     @pytest.mark.asyncio
     async def test_patch(self, client, api_key, mock_api):
@@ -120,9 +120,9 @@ class TestOnBehalfOf:
 
     @pytest.fixture
     def obo_client(self):
-        return GreenhouseClient(
-            api_key="test-key", on_behalf_of="recruiter@company.com"
-        )
+        from tests.conftest import primed_client
+
+        return primed_client(on_behalf_of="recruiter@company.com")
 
     @pytest.mark.asyncio
     async def test_post_includes_on_behalf_of(self, obo_client, mock_api):
@@ -176,7 +176,7 @@ class TestErrorHandling:
         # expected to be reworded, but it must identify the key as the cause and
         # carry a support code the user can relay.
         assert result["status_code"] == 401
-        assert "key" in result["error"].lower()
+        assert "credentials" in result["error"].lower()
         assert result["support_code"].startswith("GH401-")
         assert result["user_can_resolve"] is False
         assert result["status_code"] == 401
@@ -268,11 +268,11 @@ class TestPagination:
         result = await client.harvest_get("/candidates", paginate="single")
         assert result["items"] == [{"id": 1}, {"id": 2}]
         assert result["has_next"] is False
-        assert result["next_page"] is None
+        assert result["next_cursor"] is None
 
     @pytest.mark.asyncio
     async def test_single_page_with_link_header(self, client, mock_api):
-        next_url = f"{HARVEST_BASE}/candidates?page=2&per_page=100"
+        next_url = f"{HARVEST_BASE}/candidates?cursor=abc123def"
         link_header = f'<{next_url}>; rel="next"'
         mock_api.get(f"{HARVEST_BASE}/candidates").mock(
             return_value=httpx.Response(
@@ -283,11 +283,11 @@ class TestPagination:
         )
         result = await client.harvest_get("/candidates", paginate="single")
         assert result["has_next"] is True
-        assert result["next_page"] == next_url
+        assert result["next_cursor"] == "abc123def"
 
     @pytest.mark.asyncio
     async def test_paginate_all_follows_links(self, client, mock_api):
-        page2_url = f"{HARVEST_BASE}/candidates?page=2"
+        page2_url = f"{HARVEST_BASE}/candidates?cursor=page2cursor"
         page1_link = f'<{page2_url}>; rel="next"'
 
         call_count = 0
@@ -448,15 +448,20 @@ class TestIngestionClient:
 # ---------------------------------------------------------------------------
 
 class TestSetOnBehalfOf:
-    def test_set_on_behalf_of_updates_header(self):
-        client = GreenhouseClient(api_key="test-key")
+    @pytest.mark.asyncio
+    async def test_set_on_behalf_of_updates_header(self):
+        from tests.conftest import primed_client
+
+        client = primed_client()
         assert client.on_behalf_of is None
 
         client.set_on_behalf_of("12345")
         assert client.on_behalf_of == "12345"
 
-        headers = client._harvest_write_headers()
+        headers = await client._harvest_headers(write=True)
         assert headers["On-Behalf-Of"] == "12345"
+        # Reads stay un-attributed; On-Behalf-Of is a write-audit header.
+        assert "On-Behalf-Of" not in await client._harvest_headers()
 
 
 # ---------------------------------------------------------------------------

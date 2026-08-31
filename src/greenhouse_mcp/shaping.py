@@ -43,6 +43,37 @@ _TEXT_KEYS = frozenset({
 })
 
 
+class ProjectionMismatch(RuntimeError):
+    """A projected field was absent from every record in a non-empty page.
+
+    Raised only when GREENHOUSE_STRICT_PROJECTION is set (tests, CI). At runtime
+    the same condition is reported as a diagnostic plus a `schema_warning` on the
+    result, because a false positive must not break a recruiter's tool call.
+    """
+
+
+def strict_projection() -> bool:
+    """Whether a projection/payload mismatch should raise instead of warn."""
+    return os.environ.get("GREENHOUSE_STRICT_PROJECTION", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _absent_from_all(items: list[Any], fields: dict[str, Any]) -> list[str]:
+    """Projected field names present in the spec but in none of the records.
+
+    Absence from *some* records is ordinary optional data (`rejected_at` on an
+    active application, `closed_at` on an open job). Absence from *every* record
+    in a non-empty page is a schema mismatch — the field was renamed or moved,
+    which is exactly the Harvest v3 failure that `_project_item`'s `continue`
+    would otherwise turn into a silently emptier record.
+    """
+    dicts = [i for i in items if isinstance(i, dict)]
+    if not dicts:
+        return []
+    return sorted(k for k in fields if not any(k in d for d in dicts))
+
+
 def max_result_bytes() -> int:
     """Result budget in bytes, overridable via GREENHOUSE_MAX_RESULT_BYTES."""
     raw = os.environ.get("GREENHOUSE_MAX_RESULT_BYTES", "")
@@ -61,6 +92,10 @@ def max_result_bytes() -> int:
 #   ("a", "b")      keep only these sub-keys, elementwise for lists of dicts
 #   "count"         replace the list with "<key>_count": len(value)
 
+# Field names below are Harvest v3. The v1 names they replaced are noted inline
+# because a stale name here does not error — it silently thins every record.
+# See docs/harvest-v3-migration.md and TestStrictProjection in tests/.
+
 _JOB_FIELDS: dict[str, Any] = {
     "id": True,
     "name": True,
@@ -70,8 +105,8 @@ _JOB_FIELDS: dict[str, Any] = {
     "created_at": True,
     "opened_at": True,
     "closed_at": True,
-    "departments": ("id", "name"),
-    "offices": ("id", "name"),
+    "department_id": True,   # v1: departments[] ({id, name})
+    "office_ids": True,      # v1: offices[] ({id, name})
     "openings": "count",
     "hiring_team": "count",
 }
@@ -81,16 +116,17 @@ _APPLICATION_FIELDS: dict[str, Any] = {
     "candidate_id": True,
     "prospect": True,
     "status": True,
-    "applied_at": True,
+    "created_at": True,      # v1: applied_at
     "last_activity_at": True,
     "rejected_at": True,
-    "current_stage": ("id", "name"),
     "jobs": ("id", "name"),
     "source": ("id", "public_name"),
-    "credited_to": ("id", "name"),
+    "referrer_id": True,     # v1: credited_to ({id, name})
     "rejection_reason": ("id", "name"),
-    "attachments": "count",
     "answers": "count",
+    # v3 moved `current_stage` and `attachments` out to their own endpoints, so
+    # neither arrives inline any more. Listing them here would flag a mismatch on
+    # every healthy call and train readers to ignore the warning.
 }
 
 _CANDIDATE_FIELDS: dict[str, Any] = {
@@ -103,16 +139,16 @@ _CANDIDATE_FIELDS: dict[str, Any] = {
     "updated_at": True,
     "last_activity": True,
     "is_private": True,
-    "application_ids": True,
     "tags": True,
     "email_addresses": ("value", "type"),
     "phone_numbers": ("value", "type"),
     "recruiter": ("id", "name"),
     "coordinator": ("id", "name"),
-    "attachments": "count",
     "educations": "count",
     "employments": "count",
-    "applications": "count",
+    # v3 removed `attachments`, `application_ids` and `applications[]` from
+    # candidates — fetch attachments from /attachments and applications by
+    # filtering /applications on candidate_id.
 }
 
 _SCORECARD_FIELDS: dict[str, Any] = {
@@ -122,8 +158,8 @@ _SCORECARD_FIELDS: dict[str, Any] = {
     "interview": True,
     "interviewed_at": True,
     "submitted_at": True,
-    "overall_recommendation": True,
-    "submitted_by": ("id", "name"),
+    "candidate_rating": True,  # v1: overall_recommendation
+    "submitter_id": True,      # v1: submitted_by ({id, name})
     "interviewer": ("id", "name"),
     "attributes": "count",
     "questions": "count",
@@ -228,9 +264,10 @@ def _note_for(tool_name: str, kept: int, total: int, projected: bool) -> str:
     if kept < total and hint:
         parts.append(
             f"Do not tell the user to use flags or paging. Instead, either narrow by "
-            f"{hint} and call this tool again, or call it repeatedly with increasing "
-            f"`page` values and combine the results, so the user still gets the full "
-            f"answer they asked for."
+            f"{hint} and call this tool again, or call it again passing `cursor` set "
+            f"to this result's `next_cursor` and combine the results, so the user "
+            f"still gets the full answer they asked for. Pass the cursor on its own — "
+            f"Greenhouse rejects a cursor sent together with filters."
         )
     return " ".join(parts)
 
@@ -258,6 +295,10 @@ def shape_result(tool_name: str, result: Any) -> Any:
                 total_found=shaped.get("total_found") if isinstance(shaped, dict) else None,
             )
         return shaped
+    except ProjectionMismatch:
+        # Deliberately not swallowed: strict mode exists so a schema drift fails a
+        # test rather than quietly returning a thinner record.
+        raise
     except Exception:  # pragma: no cover — shaping must never break a tool call
         return result
 
@@ -292,6 +333,21 @@ def _shape_result(tool_name: str, result: Any) -> Any:
     fields = _PROJECTIONS.get(tool_name)
     projected = False
     if fields:
+        missing = _absent_from_all(items, fields)
+        if missing:
+            if strict_projection():
+                raise ProjectionMismatch(
+                    f"{tool_name}: projected field(s) {', '.join(missing)} absent from "
+                    f"every one of {len(items)} records — the API schema has changed."
+                )
+            from greenhouse_mcp.diagnostics import record
+
+            record("projection_mismatch", tool=tool_name, missing=missing)
+            envelope["schema_warning"] = (
+                f"These records are missing expected field(s): {', '.join(missing)}. "
+                f"The data shown may be incomplete — tell the user this answer could "
+                f"not be fully verified rather than presenting it as complete."
+            )
         candidate = [_project_item(i, fields) for i in items]
         # Guard against a projection that matched nothing useful.
         if any(candidate):

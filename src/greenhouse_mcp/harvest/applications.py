@@ -13,7 +13,16 @@ async def list_applications(
     client: GreenhouseClient,
     *,
     per_page: Annotated[int, Field(description="Results per page (max 500)")] = 500,
-    page: Annotated[int, Field(description="Page number (starts at 1)")] = 1,
+    cursor: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Opaque cursor from a previous call's `next_cursor`, to fetch the "
+                "next page. When set, all other filters are ignored — they are "
+                "already baked into the cursor."
+            )
+        ),
+    ] = None,
     job_id: Annotated[int | None, Field(description="Filter to applications on this job")] = None,
     candidate_id: Annotated[
         int | None, Field(description="Filter to applications for this candidate")
@@ -43,7 +52,7 @@ async def list_applications(
     grouped by stage, use pipeline_summary. For stale candidates, use
     stale_applications or candidates_needing_action.
     """
-    params: dict[str, Any] = {"per_page": per_page, "page": page}
+    params: dict[str, Any] = {"per_page": per_page}
     if job_id is not None:
         params["job_id"] = job_id
     if candidate_id is not None:
@@ -56,7 +65,9 @@ async def list_applications(
         params["created_before"] = created_before
     if last_activity_after is not None:
         params["last_activity_after"] = last_activity_after
-    return await client.harvest_get("/applications", params=params, paginate=paginate)
+    return await client.harvest_get(
+        "/applications", params=params, paginate=paginate, cursor=cursor
+    )
 
 
 async def get_application(
