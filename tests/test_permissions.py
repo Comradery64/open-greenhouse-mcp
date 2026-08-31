@@ -14,8 +14,8 @@ class TestResolveUserPermissions:
                 "id": 123,
                 "name": "Admin User",
                 "site_admin": True,
-                "disabled": False,
-                "primary_email_address": "admin@co.com",
+                "deactivated": False,
+                "primary_email": "admin@co.com",
             })
         )
 
@@ -33,8 +33,8 @@ class TestResolveUserPermissions:
                 "id": 456,
                 "name": "Recruiter User",
                 "site_admin": False,
-                "disabled": False,
-                "primary_email_address": "recruiter@co.com",
+                "deactivated": False,
+                "primary_email": "recruiter@co.com",
             })
         )
         mock_api.get("https://harvest.greenhouse.io/v3/users/456/permissions/jobs").mock(
@@ -57,8 +57,8 @@ class TestResolveUserPermissions:
                 "id": 789,
                 "name": "Viewer User",
                 "site_admin": False,
-                "disabled": False,
-                "primary_email_address": "viewer@co.com",
+                "deactivated": False,
+                "primary_email": "viewer@co.com",
             })
         )
         mock_api.get("https://harvest.greenhouse.io/v3/users/789/permissions/jobs").mock(
@@ -77,12 +77,12 @@ class TestResolveUserPermissions:
                 "id": 999,
                 "name": "Disabled User",
                 "site_admin": True,
-                "disabled": True,
-                "primary_email_address": "disabled@co.com",
+                "deactivated": True,
+                "primary_email": "disabled@co.com",
             })
         )
 
-        with pytest.raises(ValueError, match="disabled"):
+        with pytest.raises(ValueError, match="deactivated"):
             await resolve_user_permissions(client, user_id=999)
 
     @pytest.mark.asyncio
@@ -93,3 +93,38 @@ class TestResolveUserPermissions:
 
         with pytest.raises(ValueError, match="Cannot resolve user"):
             await resolve_user_permissions(client, user_id=000)
+
+
+class TestDeactivatedUserGuard:
+    """v3 renamed `disabled` to `deactivated`.
+
+    Reading the old name was not a cosmetic bug: the absent key defaulted to
+    False, so a deactivated user silently passed a check that is documented to
+    refuse startup. These tests fail if the old name is reintroduced.
+    """
+
+    async def test_deactivated_user_is_refused(self, client, mock_api):
+        mock_api.get("https://harvest.greenhouse.io/v3/users/999").mock(
+            return_value=Response(200, json={
+                "id": 999,
+                "name": "Gone Away",
+                "site_admin": False,
+                "deactivated": True,
+                "primary_email": "gone@co.com",
+            })
+        )
+        with pytest.raises(ValueError, match="deactivated"):
+            await resolve_user_permissions(client, user_id=999)
+
+    async def test_missing_status_field_fails_closed(self, client, mock_api):
+        """Neither key present means we cannot tell — refuse rather than assume."""
+        mock_api.get("https://harvest.greenhouse.io/v3/users/998").mock(
+            return_value=Response(200, json={
+                "id": 998,
+                "name": "Unknown Status",
+                "site_admin": False,
+                "primary_email": "who@co.com",
+            })
+        )
+        with pytest.raises(ValueError, match="neither"):
+            await resolve_user_permissions(client, user_id=998)

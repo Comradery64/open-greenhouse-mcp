@@ -35,6 +35,31 @@ was written. See `docs/harvest-v3-migration.md` before rolling it out.
   and `applications[]` are no longer returned inline and have been dropped from
   the projections.
 
+### Fixed
+- **A deactivated user could start the server.** `permissions.py` checked
+  `user["disabled"]`, which v3 renamed to `deactivated`. The absent key
+  defaulted to `False`, so a check documented to refuse startup silently passed
+  everyone. It now reads the v3 name and fails closed when neither key is
+  present. Regression tests were added, because the existing suite passed with
+  the bug reintroduced.
+- **Resumes could not be read at all.** Four call sites across three modules
+  read `candidate["attachments"]`, which v3 removed. Resumes now come from
+  candidate → applications → `/attachments`, behind one helper. A payload whose
+  attachments carry no `type` field is reported as a schema error rather than
+  "no resume found".
+- **Pipeline stages read as "Unknown" everywhere.** `current_stage` is no longer
+  inline; applications carry `stage_id`. Names are resolved through one *cached*
+  `/job_interview_stages` call per job rather than two calls per application.
+- **`/jobs/{id}/stages` no longer exists in v3** — replaced by
+  `/job_interview_stages?job_id=`, which also settles an open question in the
+  migration doc.
+- `screen_candidate` reported every candidate as having no prior applications
+  (`candidate["applications"]`, removed in v3).
+- Remaining `page`-based loops in the composite tools were still sending a
+  parameter v3 ignores; all now use cursors.
+- `applied_at` → `created_at` and `primary_email_address` → `primary_email` at
+  every remaining read site.
+
 ### Added
 - **Strict projection**, the guard that makes the rest of this verifiable. A
   projected field absent from *every* record in a page is a schema mismatch, not

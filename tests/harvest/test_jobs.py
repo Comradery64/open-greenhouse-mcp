@@ -148,11 +148,13 @@ async def test_list_job_stages(client: GreenhouseClient) -> None:
 async def test_list_job_stages_for_job(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.job_stages import list_job_stages_for_job
 
-    respx.get(f"{HARVEST_BASE}/jobs/42/stages").mock(
+    # v3 replaced the job-scoped path with a filtered top-level collection.
+    route = respx.get(f"{HARVEST_BASE}/job_interview_stages").mock(
         return_value=httpx.Response(200, json=[{"id": 2, "name": "Phone Screen"}])
     )
     result = await list_job_stages_for_job(client, job_id=42)
     assert result["items"][0]["name"] == "Phone Screen"
+    assert route.calls[0].request.url.params["job_id"] == "42"
 
 
 @respx.mock
