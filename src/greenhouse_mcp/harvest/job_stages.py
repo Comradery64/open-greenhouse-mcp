@@ -38,7 +38,55 @@ async def list_job_stages_for_job(
     user says "move to the onsite stage," use this to find the stage_id. To
     find the job_id first: list_jobs → match by name.
     """
-    return await client.harvest_get(f"/jobs/{job_id}/stages")
+    # v3 replaced the job-scoped /jobs/{id}/stages with a filtered top-level
+    # collection. The filter is plural `job_ids`; `job_id` returns a 422.
+    return await client.harvest_get(
+        "/job_interview_stages", params={"job_ids": job_id, "per_page": 500}
+    )
+
+
+async def _stage_names_for_job(client: GreenhouseClient, job_id: int) -> dict[int, str]:
+    """Map stage_id → stage name for one job.
+
+    v3 stopped returning `current_stage` inline on applications; each carries a
+    `stage_id` instead. Resolving that per application would cost two extra
+    calls per row, so the stage list is fetched once per job and cached — one
+    extra call regardless of pipeline size, which matters against v3's stricter
+    rate-limit window.
+    """
+    result = await client.harvest_get_cached(
+        "/job_interview_stages", params={"job_ids": job_id, "per_page": 500}
+    )
+    if "error" in result and "status_code" in result:
+        return {}
+    names: dict[int, str] = {}
+    for stage in result.get("items", []):
+        if isinstance(stage, dict) and stage.get("id") is not None:
+            names[stage["id"]] = stage.get("name", "Unknown")
+    return names
+
+
+def _stage_name(app: dict[str, Any], names: dict[int, str]) -> str:
+    """Resolve an application's stage name from its `stage_id`."""
+    stage_id = app.get("stage_id")
+    if stage_id is None:
+        return "Unknown"
+    return names.get(stage_id, "Unknown")
+
+
+async def _stage_names_for_apps(
+    client: GreenhouseClient, apps: list[dict[str, Any]]
+) -> dict[int, str]:
+    """Merged stage_id → name map covering every job the applications touch."""
+    job_ids: set[int] = set()
+    for app in apps:
+        for job in app.get("jobs", []) or []:
+            if isinstance(job, dict) and job.get("id") is not None:
+                job_ids.add(job["id"])
+    names: dict[int, str] = {}
+    for jid in job_ids:
+        names.update(await _stage_names_for_job(client, jid))
+    return names
 
 
 async def get_job_stage(

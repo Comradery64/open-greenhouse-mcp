@@ -2,9 +2,9 @@
   "manifest_version": "0.4",
   "name": "greenhouse-mcp",
   "display_name": "Greenhouse MCP",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "Recruiting workflow tools for Greenhouse ATS (candidate screening, applications, pipeline search, resume scanning) inside Claude.",
-  "long_description": "Curated Greenhouse recruiting tools for Claude: candidate screening, application triage, pipeline search, and resume scanning. Resumes are extracted to text server-side (PDF and DOCX) and candidate location is detected from several signals. The tool set is fixed to the recruiter-safe curated profile. Each user must enter their own personal Greenhouse Harvest API key below (issued per-person by your Greenhouse admin) \u2014 do not use a shared or team key.",
+  "long_description": "Curated Greenhouse recruiting tools for Claude: candidate screening, application triage, pipeline search, and resume scanning. Resumes are extracted to text server-side (PDF and DOCX) and candidate location is detected from several signals. The tool set is fixed to the recruiter-safe curated profile. Uses the Harvest v3 API, which needs a client ID and secret from your Greenhouse admin — the old personal Harvest API keys stopped working after 2026-08-31.",
   "author": {
     "name": "Comradery64"
   },
@@ -20,7 +20,9 @@
         "src/main.py"
       ],
       "env": {
-        "GREENHOUSE_API_KEY": "${user_config.greenhouse_api_key}",
+        "GREENHOUSE_CLIENT_ID": "${user_config.greenhouse_client_id}",
+        "GREENHOUSE_CLIENT_SECRET": "${user_config.greenhouse_client_secret}",
+        "GREENHOUSE_USER_ID": "${user_config.greenhouse_user_id}",
         "GREENHOUSE_BOARD_TOKEN": "${user_config.greenhouse_board_token}",
         "GREENHOUSE_TOOL_PROFILE": "assistant",
         "GREENHOUSE_ON_BEHALF_OF": "${user_config.on_behalf_of}",
@@ -36,12 +38,25 @@
   ],
   "license": "MIT",
   "user_config": {
-    "greenhouse_api_key": {
+    "greenhouse_client_id": {
       "type": "string",
-      "title": "Greenhouse Harvest API Key (personal)",
-      "description": "Your own personal Greenhouse Harvest API key \u2014 do not share this with teammates. Ask your Greenhouse admin to issue you an individual key (Configure \u2192 Dev Center \u2192 API Credential Management) scoped to only the permissions you need, so actions are attributed to you and can be revoked individually.",
+      "title": "Greenhouse Client ID",
+      "description": "The Harvest v3 client ID issued by your Greenhouse admin (Configure → Dev Center → API Credential Management), with scopes granted for the endpoints you need.",
       "sensitive": true,
       "required": true
+    },
+    "greenhouse_client_secret": {
+      "type": "string",
+      "title": "Greenhouse Client Secret",
+      "description": "The secret paired with the client ID above. Treat it like a password: it is shown once at creation and cannot be read back.",
+      "sensitive": true,
+      "required": true
+    },
+    "greenhouse_user_id": {
+      "type": "string",
+      "title": "Your Greenhouse User ID",
+      "description": "Your own Greenhouse user ID. Harvest v3 attributes each call to this user, so set it to yourself rather than a shared account.",
+      "required": false
     },
     "greenhouse_board_token": {
       "type": "string",

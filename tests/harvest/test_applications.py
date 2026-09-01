@@ -6,13 +6,14 @@ import pytest
 import respx
 
 from greenhouse_mcp.client import GreenhouseClient
+from tests.conftest import primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 @respx.mock
@@ -42,7 +43,7 @@ async def test_list_applications_with_filters(client: GreenhouseClient) -> None:
 async def test_get_application(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.applications import get_application
 
-    respx.get(f"{HARVEST_BASE}/applications/100").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json={"id": 100, "job_id": 5})
     )
     result = await get_application(client, application_id=100)
@@ -87,7 +88,8 @@ async def test_delete_application(client: GreenhouseClient) -> None:
 async def test_advance_application(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.applications import advance_application
 
-    respx.post(f"{HARVEST_BASE}/applications/100/advance").mock(
+    # v3 renamed advance to move; the application id stays in the path.
+    respx.post(f"{HARVEST_BASE}/applications/100/move").mock(
         return_value=httpx.Response(200, json={"id": 100, "current_stage": {"id": 3}})
     )
     result = await advance_application(client, application_id=100, from_stage_id=2, to_stage_id=3)
@@ -210,7 +212,7 @@ async def test_list_applications_error(client: GreenhouseClient) -> None:
 async def test_get_application_not_found(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.applications import get_application
 
-    respx.get(f"{HARVEST_BASE}/applications/9999").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(404, json={"message": "Not found"})
     )
     result = await get_application(client, application_id=9999)

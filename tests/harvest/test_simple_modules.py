@@ -6,13 +6,14 @@ import pytest
 import respx
 
 from greenhouse_mcp.client import GreenhouseClient
+from tests.conftest import primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +142,8 @@ async def test_list_tags(client: GreenhouseClient) -> None:
 async def test_add_tag_to_candidate(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.tags import add_tag_to_candidate
 
-    respx.put(f"{HARVEST_BASE}/candidates/42/tags/7").mock(
+    # v3: applying a tag is a POST with both ids in the body.
+    respx.post(f"{HARVEST_BASE}/applied_candidate_tags").mock(
         return_value=httpx.Response(200, json={"tag_id": 7})
     )
     result = await add_tag_to_candidate(client, candidate_id=42, tag_id=7)
@@ -167,11 +169,14 @@ async def test_remove_tag_from_candidate(client: GreenhouseClient) -> None:
 async def test_get_activity_feed(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.activity_feed import get_activity_feed
 
-    respx.get(f"{HARVEST_BASE}/candidates/42/activity_feed").mock(
-        return_value=httpx.Response(200, json={"activities": [{"id": 1}]})
+    # v3 removed /candidates/{id}/activity_feed; notes are their own collection
+    # and come back as a list rather than an {"activities": [...]} envelope.
+    route = respx.get(f"{HARVEST_BASE}/notes").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "body": "hello"}])
     )
     result = await get_activity_feed(client, candidate_id=42)
-    assert result["activities"][0]["id"] == 1
+    assert result["items"][0]["id"] == 1
+    assert route.calls[0].request.url.params["candidate_ids"] == "42"
 
 
 # ---------------------------------------------------------------------------

@@ -5,14 +5,15 @@ import httpx
 import pytest
 import respx
 
-from greenhouse_mcp.client import GreenhouseClient
+from greenhouse_mcp.client import HARVEST_TOKEN_URL, GreenhouseClient
+from tests.conftest import primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 @respx.mock
@@ -42,7 +43,7 @@ async def test_list_candidates_with_filters(client: GreenhouseClient) -> None:
 async def test_get_candidate(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.candidates import get_candidate
 
-    respx.get(f"{HARVEST_BASE}/candidates/42").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json={"id": 42, "first_name": "Bob"})
     )
     result = await get_candidate(client, candidate_id=42)
@@ -185,7 +186,8 @@ async def test_add_attachment(client: GreenhouseClient) -> None:
 async def test_add_note_to_candidate(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.candidates import add_note_to_candidate
 
-    respx.post(f"{HARVEST_BASE}/candidates/42/activity_feed/notes").mock(
+    # v3: notes are their own collection; the candidate id moves to the body.
+    respx.post(f"{HARVEST_BASE}/notes").mock(
         return_value=httpx.Response(201, json={"body": "Great candidate", "visibility": "private"})
     )
     result = await add_note_to_candidate(client, candidate_id=42, body="Great candidate")
@@ -215,19 +217,28 @@ async def test_add_email_note_to_candidate(client: GreenhouseClient) -> None:
 async def test_list_candidates_error(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.candidates import list_candidates
 
-    respx.get(f"{HARVEST_BASE}/candidates").mock(
+    # A 401 makes the client discard its token and retry once, so the token
+    # endpoint has to be reachable for the retry to reach the API at all.
+    respx.post(HARVEST_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "refreshed", "expires_in": 3600}
+        )
+    )
+    route = respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(401, json={"message": "Unauthorized"})
     )
     result = await list_candidates(client)
     assert "error" in result
     assert result["status_code"] == 401
+    # Retried exactly once — a second 401 is a real auth failure, not a stale token.
+    assert route.call_count == 2
 
 
 @respx.mock
 async def test_get_candidate_not_found(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.candidates import get_candidate
 
-    respx.get(f"{HARVEST_BASE}/candidates/9999").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(404, json={"message": "Not found"})
     )
     result = await get_candidate(client, candidate_id=9999)

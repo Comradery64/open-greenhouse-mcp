@@ -6,13 +6,14 @@ import pytest
 import respx
 
 from greenhouse_mcp.client import GreenhouseClient
+from tests.conftest import primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 # --- offers ---
@@ -89,18 +90,20 @@ async def test_list_scorecards(client: GreenhouseClient) -> None:
 async def test_list_scorecards_for_application(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.scorecards import list_scorecards_for_application
 
-    respx.get(f"{HARVEST_BASE}/applications/10/scorecards").mock(
+    # v3 dropped the nested path; scorecards are filtered by application_ids.
+    route = respx.get(f"{HARVEST_BASE}/scorecards").mock(
         return_value=httpx.Response(200, json=[{"id": 2}])
     )
     result = await list_scorecards_for_application(client, application_id=10)
     assert result["items"] == [{"id": 2}]
+    assert route.calls[0].request.url.params["application_ids"] == "10"
 
 
 @respx.mock
 async def test_get_scorecard(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.scorecards import get_scorecard
 
-    respx.get(f"{HARVEST_BASE}/scorecards/5").mock(
+    respx.get(f"{HARVEST_BASE}/scorecards").mock(
         return_value=httpx.Response(200, json={"id": 5, "overall_recommendation": "no"})
     )
     result = await get_scorecard(client, scorecard_id=5)

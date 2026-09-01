@@ -11,6 +11,11 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from greenhouse_mcp.client import GreenhouseClient
+from greenhouse_mcp.harvest.job_stages import (
+    _stage_name,
+    _stage_names_for_apps,
+    _stage_names_for_job,
+)
 
 
 async def _resolve_candidate_names(
@@ -36,7 +41,7 @@ async def _resolve_candidate_names(
         ids_param = ",".join(str(cid) for cid in chunk)
         result = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in result and "status_code" in result:
@@ -69,46 +74,52 @@ async def pipeline_summary(
     errors: list[dict[str, Any]] = []
 
     # Get job details
-    job = await client.harvest_get_one(f"/jobs/{job_id}")
+    job = await client.harvest_get_by_id("/jobs", job_id)
     if "error" in job and "status_code" in job:
         return job  # Can't continue without the job
 
     # Get stages for this job
-    stages_result = await client.harvest_get(f"/jobs/{job_id}/stages", paginate="single")
+    stages_result = await client.harvest_get(
+        "/job_interview_stages",
+        params={"job_ids": job_id, "per_page": 500},
+        paginate="single",
+    )
     stages_list = stages_result.get("items", [])
 
     # Get all active applications for this job
     all_apps: list[dict[str, Any]] = []
-    page = 1
+    cursor: str | None = None
     while True:
         result = await client.harvest_get(
             "/applications",
-            params={
-                "job_id": job_id,
+            params=None if cursor else {
+                "job_ids": job_id,
                 "status": "active",
                 "per_page": 500,
-                "page": page,
             },
             paginate="single",
+            cursor=cursor,
         )
         if "error" in result and "status_code" in result:
-            errors.append({"step": "fetch_applications", "page": page, **result})
+            errors.append({"step": "fetch_applications", "paged": cursor is not None, **result})
             break  # Return partial results from pages we did get
         items = result.get("items", [])
         all_apps.extend(items)
         if not result.get("has_next"):
             break
-        page += 1
+        cursor = result.get("next_cursor")
+        if not cursor:
+            break
 
     # Batch-resolve candidate names
     cand_ids: set[int] = {app["candidate_id"] for app in all_apps if app.get("candidate_id")}
     names = await _resolve_candidate_names(client, cand_ids)
 
-    # Group by stage
+    # Group by stage. v3: resolved from stage_id via one cached call per job.
+    stage_names = await _stage_names_for_job(client, job_id)
     stages: dict[str, list[dict[str, Any]]] = {}
     for app in all_apps:
-        current_stage = app.get("current_stage") or {}
-        stage_name = current_stage.get("name", "Unknown")
+        stage_name = _stage_name(app, stage_names)
         if stage_name not in stages:
             stages[stage_name] = []
 
@@ -129,7 +140,7 @@ async def pipeline_summary(
                 "application_id": app.get("id"),
                 "candidate_id": cid,
                 "candidate_name": names.get(cid, str(cid)) if cid else "",
-                "applied_at": app.get("applied_at"),
+                "applied_at": app.get("created_at"),
                 "last_activity": last_activity,
                 "days_since_activity": days_in_stage,
                 "source": (app.get("source") or {}).get("public_name"),
@@ -194,21 +205,27 @@ async def candidates_needing_action(
     # Fetch active applications
     params: dict[str, Any] = {"status": "active", "per_page": 500}
     if job_id:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
 
     all_apps: list[dict[str, Any]] = []
-    page = 1
+    cursor: str | None = None
     while True:
-        params["page"] = page
-        result = await client.harvest_get("/applications", params=params, paginate="single")
+        result = await client.harvest_get(
+            "/applications",
+            params=None if cursor else params,
+            paginate="single",
+            cursor=cursor,
+        )
         if "error" in result and "status_code" in result:
-            errors.append({"step": "fetch_applications", "page": page, **result})
+            errors.append({"step": "fetch_applications", "paged": cursor is not None, **result})
             break
         items = result.get("items", [])
         all_apps.extend(items)
         if not result.get("has_next"):
             break
-        page += 1
+        cursor = result.get("next_cursor")
+        if not cursor:
+            break
 
     # First pass: identify stale applications (without names yet)
     stale_raw: list[tuple[dict[str, Any], int]] = []
@@ -235,6 +252,8 @@ async def candidates_needing_action(
         app["candidate_id"] for app, _ in stale_raw if app.get("candidate_id")
     }
     names = await _resolve_candidate_names(client, stale_cand_ids)
+    # v3: stage resolved from stage_id; one cached call per job involved.
+    stage_names = await _stage_names_for_apps(client, [a for a, _ in stale_raw])
 
     stale: list[dict[str, Any]] = []
     for app, days_inactive in stale_raw:
@@ -244,7 +263,7 @@ async def candidates_needing_action(
                 "application_id": app.get("id"),
                 "candidate_id": cid,
                 "candidate_name": names.get(cid, str(cid)) if cid else "",
-                "current_stage": (app.get("current_stage") or {}).get("name"),
+                "current_stage": _stage_name(app, stage_names),
                 "job_name": (app.get("jobs", [{}])[0].get("name") if app.get("jobs") else None),
                 "last_activity": app.get("last_activity_at"),
                 "days_inactive": days_inactive,
@@ -253,7 +272,7 @@ async def candidates_needing_action(
 
     # Check for interviews needing scorecards (recent interviews only)
     interviews_result = await client.harvest_get(
-        "/scheduled_interviews", params={"per_page": 100}, paginate="single"
+        "/interviews", params={"per_page": 100}, paginate="single"
     )
     if not ("error" in interviews_result and "status_code" in interviews_result):
         for interview in interviews_result.get("items", []):
@@ -308,16 +327,20 @@ async def stale_applications(
     errors: list[dict[str, Any]] = []
     params: dict[str, Any] = {"status": "active", "per_page": 500}
     if job_id:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
 
     all_apps: list[dict[str, Any]] = []
     stale_apps_raw: list[tuple[dict[str, Any], int]] = []
-    page = 1
+    cursor: str | None = None
     while True:
-        params["page"] = page
-        result = await client.harvest_get("/applications", params=params, paginate="single")
+        result = await client.harvest_get(
+            "/applications",
+            params=None if cursor else params,
+            paginate="single",
+            cursor=cursor,
+        )
         if "error" in result and "status_code" in result:
-            errors.append({"step": "fetch_applications", "page": page, **result})
+            errors.append({"step": "fetch_applications", "paged": cursor is not None, **result})
             break
         items = result.get("items", [])
         if not items:
@@ -339,7 +362,9 @@ async def stale_applications(
         all_apps.extend(items)
         if not result.get("has_next"):
             break
-        page += 1
+        cursor = result.get("next_cursor")
+        if not cursor:
+            break
 
     # Sort by stalest first, then only resolve names for the returned slice
     stale_apps_raw.sort(key=lambda x: x[1], reverse=True)
@@ -347,6 +372,8 @@ async def stale_applications(
 
     cand_ids: set[int] = {app["candidate_id"] for app, _ in top_stale if app.get("candidate_id")}
     names = await _resolve_candidate_names(client, cand_ids)
+    # v3: stage resolved from stage_id; one cached call per job involved.
+    stage_names = await _stage_names_for_apps(client, all_apps)
 
     stale: list[dict[str, Any]] = []
     for app, days_inactive in top_stale:
@@ -356,11 +383,11 @@ async def stale_applications(
                 "application_id": app.get("id"),
                 "candidate_id": cid,
                 "candidate_name": names.get(cid, str(cid)) if cid else "",
-                "current_stage": (app.get("current_stage") or {}).get("name"),
+                "current_stage": _stage_name(app, stage_names),
                 "job_name": (app.get("jobs", [{}])[0].get("name") if app.get("jobs") else None),
                 "last_activity": app.get("last_activity_at"),
                 "days_inactive": days_inactive,
-                "applied_at": app.get("applied_at"),
+                "applied_at": app.get("created_at"),
             }
         )
     result_data: dict[str, Any] = {

@@ -13,7 +13,16 @@ async def list_candidates(
     client: GreenhouseClient,
     *,
     per_page: Annotated[int, Field(description="Results per page (max 500)")] = 500,
-    page: Annotated[int, Field(description="Page number (starts at 1)")] = 1,
+    cursor: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Opaque cursor from a previous call's `next_cursor`, to fetch the "
+                "next page. When set, all other filters are ignored — they are "
+                "already baked into the cursor."
+            )
+        ),
+    ] = None,
     email: Annotated[str | None, Field(description="Filter by exact email address")] = None,
     candidate_ids: Annotated[
         list[int] | None, Field(description="Filter to specific candidate IDs")
@@ -41,20 +50,20 @@ async def list_candidates(
     for bulk operations: date-range queries, fetching by specific IDs, or
     paginating through the full database.
     """
-    params: dict[str, Any] = {"per_page": per_page, "page": page}
+    params: dict[str, Any] = {"per_page": per_page}
     if email is not None:
         params["email"] = email
     if candidate_ids is not None:
-        params["candidate_ids"] = ",".join(str(i) for i in candidate_ids)
+        params["ids"] = ",".join(str(i) for i in candidate_ids)
     if created_after is not None:
-        params["created_after"] = created_after
+        params["created_at[gte]"] = created_after
     if created_before is not None:
-        params["created_before"] = created_before
+        params["created_at[lte]"] = created_before
     if updated_after is not None:
-        params["updated_after"] = updated_after
+        params["updated_at[gte]"] = updated_after
     if updated_before is not None:
-        params["updated_before"] = updated_before
-    return await client.harvest_get("/candidates", params=params, paginate=paginate)
+        params["updated_at[lte]"] = updated_before
+    return await client.harvest_get("/candidates", params=params, paginate=paginate, cursor=cursor)
 
 
 async def get_candidate(
@@ -70,7 +79,7 @@ async def get_candidate(
     search_candidates_by_name. For a screening package with resume and
     location, use screen_candidate.
     """
-    return await client.harvest_get_one(f"/candidates/{candidate_id}")
+    return await client.harvest_get_by_id("/candidates", candidate_id)
 
 
 async def create_candidate(
@@ -446,7 +455,9 @@ async def add_note_to_candidate(
     """
     json_data: dict[str, Any] = {"body": body, "visibility": visibility}
     return await client.harvest_post(
-        f"/candidates/{candidate_id}/activity_feed/notes", json_data=json_data
+        # v3: notes are a top-level collection and the candidate id moves into
+        # the body. Unverified — writes were not exercised against a live instance.
+        "/notes", json_data={**json_data, "candidate_id": candidate_id}
     )
 
 

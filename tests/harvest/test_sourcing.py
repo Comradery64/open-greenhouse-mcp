@@ -6,13 +6,14 @@ import pytest
 import respx
 
 from greenhouse_mcp.client import GreenhouseClient
+from tests.conftest import mock_resume_chain, primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 # ─── _calculate_experience_years ─────────────────────────────────────
@@ -611,14 +612,12 @@ async def test_search_pipeline_with_statuses(
             "jobs": [{"id": 10, "name": "SWE"}],
         },
     ]
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     # Only Alice (active) should be batch-fetched
     alice = _mock_candidates_for_sourcing()[0]
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[alice])
     )
+    mock_resume_chain([alice], pipeline_applications=apps)
 
     # Only active — should exclude Bob (rejected)
     result = await search_pipeline_candidates(
@@ -668,10 +667,14 @@ async def test_scan_respects_max_pages(
     def side_effect(request: httpx.Request) -> httpx.Response:
         nonlocal call_count
         call_count += 1
+        # A v3 next link always carries the cursor. Without one there is no way
+        # to ask for the following page, so the scan would correctly stop at 1.
         return httpx.Response(
             200,
             json=_mock_candidates_for_sourcing(),
-            headers={"link": '<https://next>; rel="next"'},
+            headers={
+                "link": f'<{HARVEST_BASE}/candidates?cursor=PAGE{call_count}>; rel="next"'
+            },
         )
 
     respx.get(f"{HARVEST_BASE}/candidates").mock(
@@ -724,7 +727,7 @@ async def test_scan_with_date_filter(
     )
 
     request = route.calls[0].request
-    assert "updated_after=2026-01-01" in str(request.url)
+    assert "updated_at%5Bgte%5D=2026-01-01" in str(request.url)
 
 
 # ─── batch_read_resumes ──────────────────────────────────────────────
@@ -776,6 +779,7 @@ async def test_batch_read_basic(client: GreenhouseClient) -> None:
             json=[_mock_candidate_with_resume()],
         )
     )
+    mock_resume_chain([_mock_candidate_with_resume()])
     respx.get("https://example.com/resume.txt").mock(
         return_value=httpx.Response(
             200,
@@ -807,6 +811,7 @@ async def test_batch_read_respects_max_candidates(
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[])
     )
+    mock_resume_chain([])
 
     result = await batch_read_resumes(
         client,
@@ -823,6 +828,7 @@ async def test_batch_read_respects_max_candidates(
 async def test_batch_read_no_resume_attachment(
     client: GreenhouseClient,
 ) -> None:
+    mock_resume_chain([_mock_candidate_no_resume()])
     from greenhouse_mcp.harvest.sourcing import batch_read_resumes
 
     respx.get(f"{HARVEST_BASE}/candidates").mock(
@@ -831,6 +837,7 @@ async def test_batch_read_no_resume_attachment(
             json=[_mock_candidate_no_resume()],
         )
     )
+    mock_resume_chain([_mock_candidate_no_resume()])
 
     result = await batch_read_resumes(
         client, candidate_ids=[2]
@@ -856,6 +863,7 @@ async def test_batch_read_download_error(
             json=[_mock_candidate_with_resume()],
         )
     )
+    mock_resume_chain([_mock_candidate_with_resume()])
     respx.get("https://example.com/resume.txt").mock(
         return_value=httpx.Response(500)
     )
@@ -881,6 +889,7 @@ async def test_batch_read_candidate_not_found(
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[])
     )
+    mock_resume_chain([])
 
     result = await batch_read_resumes(
         client, candidate_ids=[999]
@@ -1083,12 +1092,10 @@ async def test_scan_pipeline_resumes_basic(
         2, "Bob Jones", "Java developer with Spring Boot"
     )
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200,
@@ -1136,12 +1143,10 @@ async def test_scan_pipeline_resumes_no_matches(
         1, "Alice Smith", "Java developer"
     )
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1])
     )
+    mock_resume_chain([cand1], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200,
@@ -1182,12 +1187,10 @@ async def test_scan_pipeline_resumes_respects_max(
         _mock_candidate_with_text_resume(3, "E F", "OCaml dev"),
     ]
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=cands)
     )
+    mock_resume_chain(cands, pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="OCaml developer",
@@ -1222,12 +1225,10 @@ async def test_scan_pipeline_resumes_sorts_by_keyword_count(
     cand1 = _mock_candidate_with_text_resume(1, "A B", "")
     cand2 = _mock_candidate_with_text_resume(2, "C D", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="I know Python and nothing else",
@@ -1273,12 +1274,10 @@ async def test_scan_pipeline_resumes_required_keywords_gate(
     cand1 = _mock_candidate_with_text_resume(1, "Alice Smith", "")
     cand2 = _mock_candidate_with_text_resume(2, "Bob Jones", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="Expert in OCaml and C++ with systems experience",
@@ -1322,12 +1321,10 @@ async def test_scan_pipeline_resumes_exclude_keywords(
     cand1 = _mock_candidate_with_text_resume(1, "Alice Smith", "")
     cand2 = _mock_candidate_with_text_resume(2, "Bob Jones", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="Python and Java developer with Spring Boot",
@@ -1370,12 +1367,10 @@ async def test_scan_pipeline_resumes_exclude_word_boundary(
     cand1 = _mock_candidate_with_text_resume(1, "Alice Smith", "")
     cand2 = _mock_candidate_with_text_resume(2, "Bob Jones", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     # Alice: mentions JavaScript but NOT Java (should NOT be excluded)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
@@ -1423,12 +1418,10 @@ async def test_scan_pipeline_resumes_boolean_combined(
     cand2 = _mock_candidate_with_text_resume(2, "Bob Jones", "")
     cand3 = _mock_candidate_with_text_resume(3, "Carol White", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2, cand3])
     )
+    mock_resume_chain([cand1, cand2, cand3], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="OCaml expert, also skilled in C++ and Rust",
@@ -1477,12 +1470,10 @@ async def test_scan_pipeline_resumes_keywords_still_works_alone(
     ]
     cand1 = _mock_candidate_with_text_resume(1, "Alice Smith", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1])
     )
+    mock_resume_chain([cand1], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="Python and Django developer",
@@ -1535,12 +1526,10 @@ async def test_scan_pipeline_resumes_diagnostics_keyword_frequency(
     cand1 = _mock_candidate_with_text_resume(1, "Alice Smith", "")
     cand2 = _mock_candidate_with_text_resume(2, "Bob Jones", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="Expert in Python and Django",
@@ -1583,12 +1572,10 @@ async def test_scan_pipeline_resumes_diagnostics_exclude_tracking(
     cand1 = _mock_candidate_with_text_resume(1, "Alice Smith", "")
     cand2 = _mock_candidate_with_text_resume(2, "Bob Jones", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(
             200, text="Python and Java developer",
@@ -1632,12 +1619,10 @@ async def test_scan_pipeline_resumes_diagnostics_near_misses(
     cand1 = _mock_candidate_with_text_resume(1, "Alice Smith", "")
     cand2 = _mock_candidate_with_text_resume(2, "Bob Jones", "")
 
-    respx.get(f"{HARVEST_BASE}/applications").mock(
-        return_value=httpx.Response(200, json=apps)
-    )
     respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=[cand1, cand2])
     )
+    mock_resume_chain([cand1, cand2], pipeline_applications=apps)
     # Alice has OCaml + C++ (passes)
     respx.get("https://example.com/resume_1.txt").mock(
         return_value=httpx.Response(

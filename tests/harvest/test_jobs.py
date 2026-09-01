@@ -6,13 +6,14 @@ import pytest
 import respx
 
 from greenhouse_mcp.client import GreenhouseClient
+from tests.conftest import primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 # --- jobs ---
@@ -44,7 +45,7 @@ async def test_list_jobs_with_filters(client: GreenhouseClient) -> None:
 async def test_get_job(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.jobs import get_job
 
-    respx.get(f"{HARVEST_BASE}/jobs/42").mock(
+    respx.get(f"{HARVEST_BASE}/jobs").mock(
         return_value=httpx.Response(200, json={"id": 42, "name": "Designer"})
     )
     result = await get_job(client, job_id=42)
@@ -147,11 +148,14 @@ async def test_list_job_stages(client: GreenhouseClient) -> None:
 async def test_list_job_stages_for_job(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.job_stages import list_job_stages_for_job
 
-    respx.get(f"{HARVEST_BASE}/jobs/42/stages").mock(
+    # v3 replaced the job-scoped path with a filtered top-level collection.
+    route = respx.get(f"{HARVEST_BASE}/job_interview_stages").mock(
         return_value=httpx.Response(200, json=[{"id": 2, "name": "Phone Screen"}])
     )
     result = await list_job_stages_for_job(client, job_id=42)
     assert result["items"][0]["name"] == "Phone Screen"
+    # v3 filters by the plural name; `job_id` is rejected with a 422.
+    assert route.calls[0].request.url.params["job_ids"] == "42"
 
 
 @respx.mock

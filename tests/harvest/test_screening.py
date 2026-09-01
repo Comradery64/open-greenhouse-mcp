@@ -6,13 +6,18 @@ import pytest
 import respx
 
 from greenhouse_mcp.client import GreenhouseClient
+from tests.conftest import mock_v3_side_calls, primed_client
 
-HARVEST_BASE = "https://harvest.greenhouse.io/v1"
+HARVEST_BASE = "https://harvest.greenhouse.io/v3"
+
+# v3 returns a stage_id on the application; names come from the job's
+# interview stages, fetched once per job and mapped locally.
+STAGE_NAMES = {54: "Phone Screen", 17: "Onsite", 34: "Take Home", 82: "Screen"}
 
 
 @pytest.fixture
 def client() -> GreenhouseClient:
-    return GreenhouseClient(api_key="test")
+    return primed_client()
 
 
 # ─── _strip_html ──────────────────────────────────────────────────────
@@ -145,25 +150,23 @@ class TestBuildApplicationHistory:
     def test_counts_correctly(self) -> None:
         from greenhouse_mcp.harvest.screening import _build_application_history
 
-        candidate = {
-            "applications": [
+        applications = [
                 {
                     "jobs": [{"name": "SWE"}],
-                    "applied_at": "2025-01-01T00:00:00Z",
+                    "created_at": "2025-01-01T00:00:00Z",
                     "status": "rejected",
                     "rejection_reason": {"name": "Not qualified"},
-                    "current_stage": {"name": "Phone Screen"},
+                    "stage_id": 54,
                 },
                 {
                     "jobs": [{"name": "PM"}],
-                    "applied_at": "2025-06-01T00:00:00Z",
+                    "created_at": "2025-06-01T00:00:00Z",
                     "status": "active",
                     "rejection_reason": None,
-                    "current_stage": {"name": "Onsite"},
+                    "stage_id": 17,
                 },
-            ]
-        }
-        result = _build_application_history(candidate)
+        ]
+        result = _build_application_history(applications, STAGE_NAMES)
         assert result["total_applications"] == 2
         assert result["rejected"] == 1
         assert result["active"] == 1
@@ -173,54 +176,49 @@ class TestBuildApplicationHistory:
     def test_flags_repeat_rejection(self) -> None:
         from greenhouse_mcp.harvest.screening import _build_application_history
 
-        candidate = {
-            "applications": [
+        applications = [
                 {
                     "jobs": [{"name": f"Job {i}"}],
-                    "applied_at": f"2025-0{i}-01T00:00:00Z",
+                    "created_at": f"2025-0{i}-01T00:00:00Z",
                     "status": "rejected",
                     "rejection_reason": None,
-                    "current_stage": None,
+                    "stage_id": None,
                 }
                 for i in range(1, 4)
-            ]
-        }
-        result = _build_application_history(candidate)
+        ]
+        result = _build_application_history(applications, STAGE_NAMES)
         assert result["is_repeat_rejected"] is True
         assert result["rejected"] == 3
 
     def test_not_flagged_when_hired(self) -> None:
         from greenhouse_mcp.harvest.screening import _build_application_history
 
-        candidate = {
-            "applications": [
-                {
-                    "jobs": [{"name": f"Job {i}"}],
-                    "applied_at": f"2025-0{i}-01T00:00:00Z",
-                    "status": "rejected",
-                    "rejection_reason": None,
-                    "current_stage": None,
-                }
-                for i in range(1, 4)
-            ]
-            + [
-                {
-                    "jobs": [{"name": "Hired Job"}],
-                    "applied_at": "2025-07-01T00:00:00Z",
-                    "status": "hired",
-                    "rejection_reason": None,
-                    "current_stage": {"name": "Offer"},
-                }
-            ]
-        }
-        result = _build_application_history(candidate)
+        applications = [
+            {
+                "jobs": [{"name": f"Job {i}"}],
+                "created_at": f"2025-0{i}-01T00:00:00Z",
+                "status": "rejected",
+                "rejection_reason": None,
+                "stage_id": None,
+            }
+            for i in range(1, 4)
+        ] + [
+            {
+                "jobs": [{"name": "Hired Job"}],
+                "created_at": "2025-07-01T00:00:00Z",
+                "status": "hired",
+                "rejection_reason": None,
+                "stage_id": 34,
+            }
+        ]
+        result = _build_application_history(applications, STAGE_NAMES)
         assert result["is_repeat_rejected"] is False
         assert result["hired"] == 1
 
     def test_empty_applications(self) -> None:
         from greenhouse_mcp.harvest.screening import _build_application_history
 
-        result = _build_application_history({"applications": []})
+        result = _build_application_history([], STAGE_NAMES)
         assert result["total_applications"] == 0
         assert result["is_repeat_rejected"] is False
         assert result["prior_applications"] == []
@@ -228,18 +226,16 @@ class TestBuildApplicationHistory:
     def test_includes_rejection_reason_and_stage(self) -> None:
         from greenhouse_mcp.harvest.screening import _build_application_history
 
-        candidate = {
-            "applications": [
+        applications = [
                 {
                     "jobs": [{"name": "Role A"}],
-                    "applied_at": "2025-03-01T00:00:00Z",
+                    "created_at": "2025-03-01T00:00:00Z",
                     "status": "rejected",
                     "rejection_reason": {"name": "Over-qualified"},
-                    "current_stage": {"name": "Screen"},
+                    "stage_id": 82,
                 }
-            ]
-        }
-        result = _build_application_history(candidate)
+        ]
+        result = _build_application_history(applications, STAGE_NAMES)
         prior = result["prior_applications"][0]
         assert prior["rejection_reason"] == "Over-qualified"
         assert prior["current_stage"] == "Screen"
@@ -254,10 +250,10 @@ def _mock_application() -> dict:
         "id": 100,
         "candidate_id": 200,
         "jobs": [{"id": 300, "name": "Software Engineer"}],
-        "applied_at": "2026-04-15T10:00:00Z",
+        "created_at": "2026-04-15T10:00:00Z",
         "status": "active",
         "source": {"public_name": "LinkedIn"},
-        "current_stage": {"name": "Phone Screen"},
+        "stage_id": 54,
         "location": {"address": "San Francisco, CA"},
         "answers": [
             {"question": "Where are you located?", "answer": "San Francisco"},
@@ -292,10 +288,10 @@ def _mock_candidate() -> dict:
         "applications": [
             {
                 "jobs": [{"name": "Software Engineer"}],
-                "applied_at": "2026-04-15T10:00:00Z",
+                "created_at": "2026-04-15T10:00:00Z",
                 "status": "active",
                 "rejection_reason": None,
-                "current_stage": {"name": "Phone Screen"},
+                "stage_id": 54,
             }
         ],
     }
@@ -319,18 +315,24 @@ def _mock_job_posts_html() -> list:
 @respx.mock
 @pytest.mark.asyncio
 async def test_assembles_complete_screening_package(client: GreenhouseClient) -> None:
+    # This candidate has no attachments, so the chain yields no resume. The
+    # stage name comes from the job's interview stages, keyed by stage_id.
+    mock_v3_side_calls(
+        applications=[_mock_application()],
+        stages=[{"id": 54, "name": "Phone Screen"}],
+    )
     from greenhouse_mcp.harvest.screening import screen_candidate
 
     # Mock application
-    respx.get(f"{HARVEST_BASE}/applications/100").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=_mock_application())
     )
     # Mock candidate
-    respx.get(f"{HARVEST_BASE}/candidates/200").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=_mock_candidate())
     )
     # Mock job posts
-    respx.get(f"{HARVEST_BASE}/jobs/300/job_posts").mock(
+    respx.get(f"{HARVEST_BASE}/job_posts").mock(
         return_value=httpx.Response(200, json=_mock_job_posts_html())
     )
 
@@ -378,7 +380,7 @@ async def test_assembles_complete_screening_package(client: GreenhouseClient) ->
 async def test_handles_application_not_found(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import screen_candidate
 
-    respx.get(f"{HARVEST_BASE}/applications/9999").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(404, json={"message": "Not found"})
     )
 
@@ -390,19 +392,20 @@ async def test_handles_application_not_found(client: GreenhouseClient) -> None:
 @pytest.mark.asyncio
 async def test_handles_no_resume(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import screen_candidate
+    mock_v3_side_calls(applications=[])
 
     candidate = _mock_candidate()
     candidate["attachments"] = [
         {"type": "cover_letter", "url": "https://example.com/cl.pdf", "filename": "cl.pdf"}
     ]
 
-    respx.get(f"{HARVEST_BASE}/applications/100").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=_mock_application())
     )
-    respx.get(f"{HARVEST_BASE}/candidates/200").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=candidate)
     )
-    respx.get(f"{HARVEST_BASE}/jobs/300/job_posts").mock(
+    respx.get(f"{HARVEST_BASE}/job_posts").mock(
         return_value=httpx.Response(200, json=_mock_job_posts_html())
     )
 
@@ -415,14 +418,15 @@ async def test_handles_no_resume(client: GreenhouseClient) -> None:
 @pytest.mark.asyncio
 async def test_handles_no_job_posts(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import screen_candidate
+    mock_v3_side_calls(applications=[])
 
-    respx.get(f"{HARVEST_BASE}/applications/100").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=_mock_application())
     )
-    respx.get(f"{HARVEST_BASE}/candidates/200").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=_mock_candidate())
     )
-    respx.get(f"{HARVEST_BASE}/jobs/300/job_posts").mock(
+    respx.get(f"{HARVEST_BASE}/job_posts").mock(
         return_value=httpx.Response(200, json=[])
     )
 
@@ -443,7 +447,7 @@ def _mock_applications_response() -> list[dict]:
             "applied_at": "2026-04-14T09:00:00Z",
             "status": "active",
             "source": {"public_name": "LinkedIn"},
-            "current_stage": {"name": "Application Review"},
+            "stage_id": 47,
             "answers": [
                 {"question": "Location?", "answer": "NYC"},
             ],
@@ -455,7 +459,7 @@ def _mock_applications_response() -> list[dict]:
             "applied_at": "2026-04-14T10:00:00Z",
             "status": "active",
             "source": {"public_name": "Referral"},
-            "current_stage": {"name": "Phone Screen"},
+            "stage_id": 54,
             "answers": [],
         },
         {
@@ -465,7 +469,7 @@ def _mock_applications_response() -> list[dict]:
             "applied_at": "2026-04-13T08:00:00Z",
             "status": "active",
             "source": {"public_name": "Website"},
-            "current_stage": {"name": "Application Review"},
+            "stage_id": 47,
             "answers": [
                 {"question": "Years of experience?", "answer": "3"},
             ],
@@ -486,6 +490,7 @@ def _mock_candidates_batch() -> list[dict]:
 @pytest.mark.asyncio
 async def test_fetch_groups_by_job(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import fetch_new_applications
+    mock_v3_side_calls()
 
     # Mock applications endpoint
     respx.get(f"{HARVEST_BASE}/applications").mock(
@@ -546,6 +551,7 @@ async def test_fetch_empty_results(client: GreenhouseClient) -> None:
 @pytest.mark.asyncio
 async def test_fetch_skips_name_resolution(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import fetch_new_applications
+    mock_v3_side_calls()
 
     respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=_mock_applications_response())
@@ -573,6 +579,7 @@ async def test_fetch_skips_name_resolution(client: GreenhouseClient) -> None:
 @pytest.mark.asyncio
 async def test_fetch_with_job_id_filter(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import fetch_new_applications
+    mock_v3_side_calls()
 
     apps_route = respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=[_mock_applications_response()[0]])
