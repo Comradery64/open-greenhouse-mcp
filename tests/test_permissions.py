@@ -9,14 +9,14 @@ from greenhouse_mcp.permissions import resolve_user_permissions
 class TestResolveUserPermissions:
     @pytest.mark.asyncio
     async def test_site_admin_gets_full(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v3/users/123").mock(
-            return_value=Response(200, json={
+        mock_api.get("https://harvest.greenhouse.io/v3/users").mock(
+            return_value=Response(200, json=[{
                 "id": 123,
                 "name": "Admin User",
                 "site_admin": True,
                 "deactivated": False,
                 "primary_email": "admin@co.com",
-            })
+            }])
         )
 
         perms = await resolve_user_permissions(client, user_id=123)
@@ -28,16 +28,16 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_job_admin_gets_recruiter(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v3/users/456").mock(
-            return_value=Response(200, json={
+        mock_api.get("https://harvest.greenhouse.io/v3/users").mock(
+            return_value=Response(200, json=[{
                 "id": 456,
                 "name": "Recruiter User",
                 "site_admin": False,
                 "deactivated": False,
                 "primary_email": "recruiter@co.com",
-            })
+            }])
         )
-        mock_api.get("https://harvest.greenhouse.io/v3/users/456/permissions/jobs").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/user_job_permissions").mock(
             return_value=Response(200, json=[
                 {"id": 1001, "job_id": 5001, "user_role_id": 4009207},
                 {"id": 1002, "job_id": 5002, "user_role_id": 4009207},
@@ -52,16 +52,16 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_no_permissions_gets_read_only(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v3/users/789").mock(
-            return_value=Response(200, json={
+        mock_api.get("https://harvest.greenhouse.io/v3/users").mock(
+            return_value=Response(200, json=[{
                 "id": 789,
                 "name": "Viewer User",
                 "site_admin": False,
                 "deactivated": False,
                 "primary_email": "viewer@co.com",
-            })
+            }])
         )
-        mock_api.get("https://harvest.greenhouse.io/v3/users/789/permissions/jobs").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/user_job_permissions").mock(
             return_value=Response(200, json=[])
         )
 
@@ -72,14 +72,14 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_disabled_user_raises(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v3/users/999").mock(
-            return_value=Response(200, json={
+        mock_api.get("https://harvest.greenhouse.io/v3/users").mock(
+            return_value=Response(200, json=[{
                 "id": 999,
                 "name": "Disabled User",
                 "site_admin": True,
                 "deactivated": True,
                 "primary_email": "disabled@co.com",
-            })
+            }])
         )
 
         with pytest.raises(ValueError, match="deactivated"):
@@ -87,7 +87,7 @@ class TestResolveUserPermissions:
 
     @pytest.mark.asyncio
     async def test_user_not_found_raises(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v3/users/0").mock(
+        mock_api.get("https://harvest.greenhouse.io/v3/users").mock(
             return_value=Response(404, json={"message": "Resource not found"})
         )
 
@@ -104,27 +104,27 @@ class TestDeactivatedUserGuard:
     """
 
     async def test_deactivated_user_is_refused(self, client, mock_api):
-        mock_api.get("https://harvest.greenhouse.io/v3/users/999").mock(
-            return_value=Response(200, json={
+        mock_api.get("https://harvest.greenhouse.io/v3/users").mock(
+            return_value=Response(200, json=[{
                 "id": 999,
                 "name": "Gone Away",
                 "site_admin": False,
                 "deactivated": True,
                 "primary_email": "gone@co.com",
-            })
+            }])
         )
         with pytest.raises(ValueError, match="deactivated"):
             await resolve_user_permissions(client, user_id=999)
 
     async def test_missing_status_field_fails_closed(self, client, mock_api):
         """Neither key present means we cannot tell — refuse rather than assume."""
-        mock_api.get("https://harvest.greenhouse.io/v3/users/998").mock(
-            return_value=Response(200, json={
+        mock_api.get("https://harvest.greenhouse.io/v3/users").mock(
+            return_value=Response(200, json=[{
                 "id": 998,
                 "name": "Unknown Status",
                 "site_admin": False,
                 "primary_email": "who@co.com",
-            })
+            }])
         )
         with pytest.raises(ValueError, match="neither"):
             await resolve_user_permissions(client, user_id=998)
