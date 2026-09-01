@@ -11,7 +11,16 @@ which *field names* came back. Never values. Candidate records are personal
 data and an API secret is an API secret — neither belongs in a terminal
 scrollback or a bug report.
 
-Strictly GET. Nothing here advances, rejects, tags, or notes anything.
+By default strictly GET. Nothing advances, rejects, tags or notes anything.
+
+`--writes` adds a write-path probe that still mutates nothing: every request
+targets an id this script has just *confirmed does not exist*, so there is no
+record for the API to change. What that buys is the failure shape — whether the
+route exists at all, and which body fields it expects — without putting a real
+candidate anywhere near a stage transition.
+
+It proves the door opens. It does not prove what is behind it: a successful
+write could still record the wrong thing, and only a sandbox shows that.
 """
 from __future__ import annotations
 
@@ -59,6 +68,95 @@ def _report(label, status, items, note=""):
     if not items and status == 200:
         print("         (no rows — field checks inconclusive, not a pass)")
     return ok and bool(items)
+
+
+# An id no Greenhouse instance will have issued. Confirmed unreachable at
+# runtime anyway — this is a starting guess, not the safety mechanism.
+_ABSENT_ID = 999_999_999_999
+
+
+async def _confirm_absent(client, collection: str, resource_id: int) -> bool:
+    """True only if the collection genuinely has no such record.
+
+    This is the safety interlock: no write is attempted until a read has proved
+    there is nothing at that id to damage.
+    """
+    probe = await client.harvest_get(collection, params={"ids": resource_id})
+    if "error" in probe and "status_code" in probe:
+        return False  # cannot prove absence — treat as unsafe
+    return not probe.get("items")
+
+
+def _classify(status: int, detail) -> str:
+    """Turn a failure into a verdict about the route, not the record.
+
+    The discriminator is the `errors` key, not the status. A missing route and a
+    missing record both return 404 `Resource not found` — an earlier version of
+    this check treated the two as identical and cheerfully reported that a
+    nonexistent control route "exists". Only a request that reached a handler
+    gets as far as naming what it could not find:
+
+        no route   -> {"message": "Resource not found"}
+        no record  -> {"message": "Resource not found",
+                       "errors": "Application not found"}
+    """
+    text = str(detail)
+    has_errors = isinstance(detail, dict) and detail.get("errors")
+    if 200 <= status < 300:
+        return "UNEXPECTED SUCCESS — investigate, something may have been created"
+    if status == 405:
+        return "ROUTE MISSING (method not allowed)"
+    if status in (400, 422):
+        return f"route exists, body rejected: {text[:70]}"
+    if status == 404:
+        if has_errors:
+            return "route exists (handler reached, record absent as intended)"
+        return "ROUTE MISSING (no handler reached)"
+    return f"status {status}: {text[:60]}"
+
+
+async def probe_writes(client) -> int:
+    """Probe write routes against a confirmed-absent id. Mutates nothing."""
+    print("\nwrite routes (probed against a confirmed-absent id — no mutation)")
+
+    if not await _confirm_absent(client, "/applications", _ABSENT_ID):
+        print("  [ABORT] could not confirm the probe id is unused; refusing to write")
+        return 1
+    if not await _confirm_absent(client, "/candidates", _ABSENT_ID):
+        print("  [ABORT] could not confirm the probe candidate id is unused")
+        return 1
+    print(f"  id {_ABSENT_ID} confirmed absent from /applications and /candidates\n")
+
+    # A control: a route that certainly does not exist, so "record absent" can be
+    # told apart from "route absent" rather than assumed.
+    ctl = await client.harvest_post(f"/applications/{_ABSENT_ID}/__no_such_action__")
+    print(f"  [control] bogus action -> "
+          f"{_classify(ctl.get('status_code', 0), ctl.get('technical_detail'))}\n")
+
+    probes = [
+        ("advance_application", "POST", f"/applications/{_ABSENT_ID}/move", {}),
+        ("reject_application", "POST", f"/applications/{_ABSENT_ID}/reject", {}),
+        ("unreject_application", "POST", f"/applications/{_ABSENT_ID}/unreject", None),
+        ("add_note_to_candidate", "POST", "/notes",
+         {"candidate_id": _ABSENT_ID, "body": "probe", "visibility": "private"}),
+        ("add_tag_to_candidate", "POST", "/applied_candidate_tags",
+         {"candidate_id": _ABSENT_ID, "tag": "probe"}),
+    ]
+    suspicious = 0
+    for name, _method, path, body in probes:
+        r = await client.harvest_post(path, json_data=body)
+        status = r.get("status_code", 200)
+        verdict = _classify(status, r.get("technical_detail"))
+        if "MISSING" in verdict or "UNEXPECTED" in verdict:
+            suspicious += 1
+        print(f"  {name:24} {path:44} {verdict}")
+    print()
+    if suspicious:
+        print(f"{suspicious} write route(s) look wrong — see above.")
+    else:
+        print("Every write route exists and validated the request. This does NOT "
+              "prove a successful write behaves correctly.")
+    return 1 if suspicious else 0
 
 
 async def main() -> int:
@@ -139,6 +237,8 @@ async def main() -> int:
                 print(f"         status={nxt.get('status_code')} — a 422 here means the "
                       f"cursor was sent alongside other params")
             results.append(ok)
+        if "--writes" in sys.argv:
+            results.append(await probe_writes(client) == 0)
     finally:
         await client.close()
 
