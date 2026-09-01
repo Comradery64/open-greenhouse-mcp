@@ -56,9 +56,9 @@ async def list_jobs(
     if office_id is not None:
         params["office_id"] = office_id
     if created_after is not None:
-        params["created_after"] = created_after
+        params["created_at[gte]"] = created_after
     if created_before is not None:
-        params["created_before"] = created_before
+        params["created_at[lte]"] = created_before
     return await client.harvest_get("/jobs", params=params, paginate=paginate, cursor=cursor)
 
 

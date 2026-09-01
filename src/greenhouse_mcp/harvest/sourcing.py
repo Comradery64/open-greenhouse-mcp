@@ -323,7 +323,7 @@ async def _collect_pipeline_candidate_ids(
     for job_id in job_ids:
         result = await client.harvest_get(
             "/applications",
-            params={"per_page": 500, "job_id": job_id},
+            params={"per_page": 500, "job_ids": job_id},
             paginate="all",
         )
         if "error" in result and "status_code" in result:
@@ -394,7 +394,7 @@ async def search_pipeline_candidates(
         ids_param = ",".join(str(cid) for cid in chunk)
         result = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in result and "status_code" in result:
@@ -468,7 +468,7 @@ async def scan_all_candidates(
 
     params: dict[str, Any] = {"per_page": 500}
     if updated_after:
-        params["updated_after"] = updated_after
+        params["updated_at[gte]"] = updated_after
 
     cursor: str | None = None
     for _page_num in range(1, max_pages + 1):
@@ -553,7 +553,7 @@ async def batch_read_resumes(
         ids_param = ",".join(str(cid) for cid in chunk)
         resp = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in resp and "status_code" in resp:
@@ -729,7 +729,7 @@ async def scan_pipeline_resumes(
         ids_param = ",".join(str(cid) for cid in chunk)
         resp = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in resp and "status_code" in resp:

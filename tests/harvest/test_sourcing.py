@@ -727,7 +727,7 @@ async def test_scan_with_date_filter(
     )
 
     request = route.calls[0].request
-    assert "updated_after=2026-01-01" in str(request.url)
+    assert "updated_at%5Bgte%5D=2026-01-01" in str(request.url)
 
 
 # ─── batch_read_resumes ──────────────────────────────────────────────

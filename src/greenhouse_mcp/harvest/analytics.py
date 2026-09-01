@@ -35,7 +35,7 @@ async def pipeline_metrics(
     # Get stages
     stages_result = await client.harvest_get(
         "/job_interview_stages",
-        params={"job_id": job_id, "per_page": 500},
+        params={"job_ids": job_id, "per_page": 500},
         paginate="single",
     )
     stages_list = stages_result.get("items", [])
@@ -48,7 +48,7 @@ async def pipeline_metrics(
     while True:
         result = await client.harvest_get(
             "/applications",
-            params=None if cursor else {"job_id": job_id, "per_page": 500},
+            params=None if cursor else {"job_ids": job_id, "per_page": 500},
             paginate="single",
             cursor=cursor,
         )
@@ -164,9 +164,9 @@ async def source_effectiveness(
     errors: list[dict[str, Any]] = []
     params: dict[str, Any] = {"per_page": 500}
     if job_id:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
     if created_after:
-        params["created_after"] = created_after
+        params["created_at[gte]"] = created_after
 
     all_apps: list[dict[str, Any]] = []
     cursor: str | None = None
@@ -257,9 +257,9 @@ async def time_to_hire(
     errors: list[dict[str, Any]] = []
     params: dict[str, Any] = {"status": "hired", "per_page": 500}
     if job_id:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
     if created_after:
-        params["created_after"] = created_after
+        params["created_at[gte]"] = created_after
 
     all_apps: list[dict[str, Any]] = []
     cursor: str | None = None

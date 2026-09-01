@@ -54,15 +54,15 @@ async def list_candidates(
     if email is not None:
         params["email"] = email
     if candidate_ids is not None:
-        params["candidate_ids"] = ",".join(str(i) for i in candidate_ids)
+        params["ids"] = ",".join(str(i) for i in candidate_ids)
     if created_after is not None:
-        params["created_after"] = created_after
+        params["created_at[gte]"] = created_after
     if created_before is not None:
-        params["created_before"] = created_before
+        params["created_at[lte]"] = created_before
     if updated_after is not None:
-        params["updated_after"] = updated_after
+        params["updated_at[gte]"] = updated_after
     if updated_before is not None:
-        params["updated_before"] = updated_before
+        params["updated_at[lte]"] = updated_before
     return await client.harvest_get("/candidates", params=params, paginate=paginate, cursor=cursor)
 
 
