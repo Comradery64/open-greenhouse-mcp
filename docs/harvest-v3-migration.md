@@ -50,6 +50,33 @@ exactly that.
 for a far-future bound and checking the row count actually dropped, since a
 silently-ignored filter also returns 200.
 
+### Write probing — what it cost
+
+Write routes whose id sits in the **path** can be probed safely: point them at an
+id proved absent first and there is no record to change. `move`, `reject` and
+`unreject` were confirmed this way.
+
+Writes whose id sits in the **body** cannot. Greenhouse does not validate that
+`candidate_id` refers to a real candidate, so `POST /notes` against an absent id
+**still creates a row** — and v3 has no `DELETE /notes/{id}`, so it cannot be
+undone through the API. Two orphaned notes were created on 2026-09-01 learning
+this. Their schemas must come from documentation or a sandbox.
+
+The discriminator for "does this route exist" is the `errors` key, not the status
+code: a missing route and a missing record both return 404 `Resource not found`,
+and only a request that reached a handler names what it could not find.
+
+Two write shapes that cost real records to establish:
+
+- `POST /notes` requires `note_type`, and the accepted value is **`"NOTE"`** —
+  upper-case — even though the validation error advertises
+  `["email", "activity", "note"]`. The lower-case form is rejected. `visibility`
+  is also required.
+- `POST /applied_candidate_tags` takes `candidate_tag_id`; both `tag` and
+  `tag_id` are rejected as disallowed additional properties. Tag names must be
+  resolved against `/candidate_tags` first, and v1's implicit tag creation is
+  gone.
+
 ### What Phase A changed
 
 | Item | Where |

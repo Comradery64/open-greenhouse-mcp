@@ -7,6 +7,7 @@ quietly wrong data. See docs/harvest-v3-migration.md.
 from __future__ import annotations
 
 import base64
+import json
 import pathlib
 import time
 
@@ -286,3 +287,82 @@ class TestStrictProjection:
             del item["rejected_at"]
         shaped = shaping.shape_result("list_applications", _big_page(items))
         assert "schema_warning" not in shaped
+
+
+# ---------------------------------------------------------------------------
+# Write bodies
+# ---------------------------------------------------------------------------
+
+class TestWriteBodies:
+    """The v3 write shapes, pinned.
+
+    Each of these was wrong in the first migration pass and was corrected only
+    after Greenhouse's own validation errors named the right field. They are
+    asserted exactly because the cost of relearning them was creating two
+    undeletable notes in a production ATS.
+    """
+
+    @respx.mock
+    async def test_note_sends_uppercase_note_type(self):
+        from greenhouse_mcp.harvest.candidates import add_note_to_candidate
+
+        respx.post(HARVEST_TOKEN_URL).mock(return_value=_token())
+        route = respx.post(f"{HARVEST_BASE}/notes").mock(
+            return_value=httpx.Response(201, json={"id": 1})
+        )
+        await add_note_to_candidate(_client(), candidate_id=42, body="hello")
+
+        sent = json.loads(route.calls[0].request.content)
+        # Upper-case, despite the API's error advertising lower-case values.
+        assert sent["note_type"] == "NOTE"
+        assert sent["candidate_id"] == 42
+        assert sent["visibility"] == "private"
+
+    @respx.mock
+    async def test_tag_sends_candidate_tag_id(self):
+        from greenhouse_mcp.harvest.tags import add_tag_to_candidate
+
+        respx.post(HARVEST_TOKEN_URL).mock(return_value=_token())
+        route = respx.post(f"{HARVEST_BASE}/applied_candidate_tags").mock(
+            return_value=httpx.Response(201, json={"id": 1})
+        )
+        await add_tag_to_candidate(_client(), candidate_id=42, tag_id=7)
+
+        sent = json.loads(route.calls[0].request.content)
+        assert sent == {"candidate_id": 42, "candidate_tag_id": 7}
+        assert "tag" not in sent  # rejected as a disallowed additional property
+
+    @respx.mock
+    async def test_bulk_tag_resolves_name_to_id(self):
+        from greenhouse_mcp.harvest.batch import bulk_tag
+
+        respx.post(HARVEST_TOKEN_URL).mock(return_value=_token())
+        respx.get(f"{HARVEST_BASE}/candidate_tags").mock(
+            return_value=httpx.Response(200, json=[{"id": 9, "name": "Referred"}])
+        )
+        route = respx.post(f"{HARVEST_BASE}/applied_candidate_tags").mock(
+            return_value=httpx.Response(201, json={"id": 1})
+        )
+        # Case-insensitive: recruiters do not type the tag exactly as stored.
+        result = await bulk_tag(_client(), candidate_ids=[42], tag_name="referred")
+
+        assert result["succeeded"] == 1
+        assert json.loads(route.calls[0].request.content)["candidate_tag_id"] == 9
+
+    @respx.mock
+    async def test_bulk_tag_unknown_name_is_an_error_not_a_new_tag(self):
+        """v1 created missing tags implicitly; v3 cannot, so say so."""
+        from greenhouse_mcp.harvest.batch import bulk_tag
+
+        respx.post(HARVEST_TOKEN_URL).mock(return_value=_token())
+        respx.get(f"{HARVEST_BASE}/candidate_tags").mock(
+            return_value=httpx.Response(200, json=[{"id": 9, "name": "Referred"}])
+        )
+        created = respx.post(f"{HARVEST_BASE}/applied_candidate_tags").mock(
+            return_value=httpx.Response(201, json={"id": 1})
+        )
+        result = await bulk_tag(_client(), candidate_ids=[42], tag_name="Nonexistent")
+
+        assert result["status_code"] == 404
+        assert "Nonexistent" in result["error"]
+        assert not created.called, "must not apply anything when the tag is unknown"

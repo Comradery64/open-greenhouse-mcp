@@ -133,29 +133,32 @@ async def probe_writes(client) -> int:
     print(f"  [control] bogus action -> "
           f"{_classify(ctl.get('status_code', 0), ctl.get('technical_detail'))}\n")
 
+    # ONLY path-id writes. A write whose id lives in the *body* cannot be made
+    # safe this way: Greenhouse does not check that candidate_id refers to a real
+    # candidate, so POST /notes with an absent id still creates an orphaned row.
+    # That is not hypothetical — this probe created two of them on 2026-09-01
+    # before that was understood, and v3 has no DELETE /notes/{id} to undo it.
+    # Schemas for /notes and /applied_candidate_tags must come from the docs or a
+    # sandbox, never from production.
     probes = [
         ("advance_application", "POST", f"/applications/{_ABSENT_ID}/move", {}),
         ("reject_application", "POST", f"/applications/{_ABSENT_ID}/reject", {}),
         ("unreject_application", "POST", f"/applications/{_ABSENT_ID}/unreject", None),
-        ("add_note_to_candidate", "POST", "/notes",
-         {"candidate_id": _ABSENT_ID, "body": "probe", "visibility": "private"}),
-        ("add_tag_to_candidate", "POST", "/applied_candidate_tags",
-         {"candidate_id": _ABSENT_ID, "tag": "probe"}),
     ]
     suspicious = 0
     for name, _method, path, body in probes:
         r = await client.harvest_post(path, json_data=body)
         status = r.get("status_code", 200)
         verdict = _classify(status, r.get("technical_detail"))
-        if "MISSING" in verdict or "UNEXPECTED" in verdict:
+        if any(w in verdict for w in ("MISSING", "UNEXPECTED", "body rejected")):
             suspicious += 1
         print(f"  {name:24} {path:44} {verdict}")
     print()
     if suspicious:
         print(f"{suspicious} write route(s) look wrong — see above.")
     else:
-        print("Every write route exists and validated the request. This does NOT "
-              "prove a successful write behaves correctly.")
+        print("Every probed write route exists. This does NOT prove a successful "
+              "write behaves correctly — only a sandbox shows that.")
     return 1 if suspicious else 0
 
 

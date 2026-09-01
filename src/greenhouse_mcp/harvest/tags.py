@@ -79,11 +79,12 @@ async def add_tag_to_candidate(
     candidate_id: search_candidates_by_name. For tag_id: list_tags → match
     by name. For bulk tagging, use bulk_tag instead.
     """
-    # v3: both ids move from the path into the body of a POST.
-    # Unverified — writes were not exercised against a live instance.
+    # v3: both ids move from the path into the body of a POST, and the tag field
+    # is `candidate_tag_id` — `tag` and `tag_id` are rejected as disallowed
+    # additional properties.
     return await client.harvest_post(
         "/applied_candidate_tags",
-        json_data={"candidate_id": candidate_id, "tag_id": tag_id},
+        json_data={"candidate_id": candidate_id, "candidate_tag_id": tag_id},
     )
 
 

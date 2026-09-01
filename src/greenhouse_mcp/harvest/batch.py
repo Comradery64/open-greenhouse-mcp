@@ -95,15 +95,36 @@ async def bulk_tag(
     if not candidate_ids:
         return {"error": "No candidate IDs provided.", "status_code": 0}
 
+    # v3 applies a tag by id, not by name, so the name is resolved once here
+    # rather than per candidate. The old "created on-the-fly if it doesn't
+    # exist" behaviour is gone: an unknown name is now an error the caller can
+    # act on, rather than a silently-created tag nobody chose.
+    tags = await client.harvest_get(
+        "/candidate_tags", params={"per_page": 500}, paginate="all"
+    )
+    if "error" in tags and "status_code" in tags:
+        return tags
+    wanted = tag_name.strip().casefold()
+    match = next(
+        (t for t in tags.get("items", [])
+         if isinstance(t, dict) and str(t.get("name", "")).strip().casefold() == wanted),
+        None,
+    )
+    if match is None:
+        return {
+            "error": f"No candidate tag named {tag_name!r} exists in Greenhouse. "
+                     f"Create it in Greenhouse first, then re-run.",
+            "status_code": 404,
+        }
+    candidate_tag_id = match["id"]
+
     successes: list[int] = []
     failures: list[dict[str, Any]] = []
 
     for cid in candidate_ids:
-        # v3: applying a tag is a POST to its own collection, with the candidate
-        # in the body. Unverified — writes were not run against a live instance.
         result = await client.harvest_post(
             "/applied_candidate_tags",
-            json_data={"candidate_id": cid, "tag": tag_name},
+            json_data={"candidate_id": cid, "candidate_tag_id": candidate_tag_id},
         )
         if "error" in result and "status_code" in result:
             failures.append(

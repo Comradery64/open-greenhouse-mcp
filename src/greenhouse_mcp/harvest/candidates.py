@@ -453,11 +453,18 @@ async def add_note_to_candidate(
     Users say "add a note to Sarah's profile" or "log that I spoke with John."
     To get candidate_id: search_candidates_by_name.
     """
-    json_data: dict[str, Any] = {"body": body, "visibility": visibility}
+    # v3: notes are a top-level collection; the candidate id moves into the body
+    # and `note_type` is required. The accepted value is upper-case "NOTE" even
+    # though the API's own validation error advertises lower-case
+    # ["email", "activity", "note"] — sending the lower-case form is rejected.
     return await client.harvest_post(
-        # v3: notes are a top-level collection and the candidate id moves into
-        # the body. Unverified — writes were not exercised against a live instance.
-        "/notes", json_data={**json_data, "candidate_id": candidate_id}
+        "/notes",
+        json_data={
+            "candidate_id": candidate_id,
+            "body": body,
+            "visibility": visibility,
+            "note_type": "NOTE",
+        },
     )
 
 
