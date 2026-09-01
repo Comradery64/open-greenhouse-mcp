@@ -5,9 +5,10 @@
 Harvest v3 migration, Phase A. Harvest v1 and v2 became unavailable after
 2026-08-31, so this release is required for the server to function at all.
 
-**Not yet verified against a live Greenhouse instance.** Every endpoint is
-checked against the migration guides only; no v3 credentials existed when this
-was written. See `docs/harvest-v3-migration.md` before rolling it out.
+**Reads verified against a live instance 2026-08-31; writes are not.** Route
+existence is confirmed for move/reject/unreject and the note and tag body shapes
+are pinned by tests, but no write has been observed taking effect. See
+`docs/HANDOFF.md` before rolling this out.
 
 ### Changed — breaking
 - **Credentials.** Harvest now uses OAuth client credentials:
@@ -36,6 +37,22 @@ was written. See `docs/harvest-v3-migration.md` before rolling it out.
   the projections.
 
 ### Fixed
+- **v3 is structurally flatter than the migration guides describe.** There are no
+  `/{collection}/{id}` show endpoints — `GET /jobs/{id}` 404s on an id `/jobs`
+  just returned — and no nested read paths. 18 of the 33 registered tools were
+  calling paths that do not exist. Single records now load via `?ids=`
+  (`client.harvest_get_by_id`), and the nested paths were replaced with
+  `/job_posts?job_ids=`, `/scorecards?application_ids=`, `/notes?candidate_ids=`,
+  `/user_job_permissions?user_ids=` and `/interviews`.
+- **Every inferred query filter was wrong.** Cross-references are plural
+  (`candidate_ids`), a collection filtered on its own ids uses `ids`, and date
+  ranges use `created_at[gte]`/`[lte]` — every `*_after`/`*_before` name is
+  rejected. `/jobs` keeps singular `department_id`/`office_id`.
+- **Write bodies.** `POST /notes` requires `note_type: "NOTE"` (upper-case, though
+  the API's own error advertises lower-case) plus `visibility`. `POST
+  /applied_candidate_tags` takes `candidate_tag_id`; `tag` and `tag_id` are
+  rejected. `bulk_tag` resolves names against `/candidate_tags`, and an unknown
+  name is now an error rather than an implicitly created tag.
 - **A deactivated user could start the server.** `permissions.py` checked
   `user["disabled"]`, which v3 renamed to `deactivated`. The absent key
   defaulted to `False`, so a check documented to refuse startup silently passed
@@ -122,6 +139,22 @@ are recruiters rather than engineers.
   traceback, an unhandled exception, or a bare `{"error": ...}` dict.
 
 ### Fixed
+- **v3 is structurally flatter than the migration guides describe.** There are no
+  `/{collection}/{id}` show endpoints — `GET /jobs/{id}` 404s on an id `/jobs`
+  just returned — and no nested read paths. 18 of the 33 registered tools were
+  calling paths that do not exist. Single records now load via `?ids=`
+  (`client.harvest_get_by_id`), and the nested paths were replaced with
+  `/job_posts?job_ids=`, `/scorecards?application_ids=`, `/notes?candidate_ids=`,
+  `/user_job_permissions?user_ids=` and `/interviews`.
+- **Every inferred query filter was wrong.** Cross-references are plural
+  (`candidate_ids`), a collection filtered on its own ids uses `ids`, and date
+  ranges use `created_at[gte]`/`[lte]` — every `*_after`/`*_before` name is
+  rejected. `/jobs` keeps singular `department_id`/`office_id`.
+- **Write bodies.** `POST /notes` requires `note_type: "NOTE"` (upper-case, though
+  the API's own error advertises lower-case) plus `visibility`. `POST
+  /applied_candidate_tags` takes `candidate_tag_id`; `tag` and `tag_id` are
+  rejected. `bulk_tag` resolves names against `/candidate_tags`, and an unknown
+  name is now an error rather than an implicitly created tag.
 - **Error statuses outside the enumerated list were treated as success data.**
   `_handle_response` special-cased 401/403/404/422/429/5xx and let everything
   else fall through to `_parse_body`, so a 400 or 409 body was wrapped by

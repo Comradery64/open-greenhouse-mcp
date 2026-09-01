@@ -79,3 +79,6 @@ dist/
 # 1Password-resolved env file for scripts/verify_v3.py (contains references, but
 # keep local copies out of git regardless)
 env.op
+
+# Local operational notes — org-specific, never committed
+LOCAL-NOTES.md

@@ -176,9 +176,15 @@ dropping it. Without that, every later step is unverifiable.
 
 ## Phase A work items, in order
 
-### A1. Blocked on admin — start today
-See [Human dependencies](#human-dependencies). Nothing else can be integration-tested
-until credentials exist.
+**All of A1–A8 are done** (2026-08-30/31). The sections below are kept as the
+record of what was planned and why; where reality differed, the difference is
+noted inline or in [The v3 shape](#the-v3-shape-established-by-probing-a-live-instance)
+above. Read that section first — it supersedes any endpoint detail here.
+
+### A1. Credentials — done
+Credentials were issued 2026-08-31 with 20 leaf scopes, stored in 1Password and
+referenced from `env.op` (see `scripts/env.op.example`). See
+[Scopes](#scopes-granted).
 
 ### A2. Token-based auth (`client.py`)
 - Replace `_harvest_auth_header` (Basic, cached in `__init__`) with an async
@@ -261,9 +267,29 @@ whatever the `recruiter` profile adds over `assistant`, then admin/config tools.
 Ingestion and Job Board tools are out of scope until their status is confirmed —
 see [Open questions](#open-questions).
 
-## Human dependencies — begin immediately
+## Scopes granted
 
-These gate everything and are not engineering work.
+20 leaf scopes, chosen to match the endpoints the 33 curated tools actually
+call. Parent scopes were deliberately *not* ticked: selecting a parent cascades
+to its write children, which silently granted `Deactivate users`, `Revoke
+permissions users` and `Destroy attachments` on the first attempt.
+
+Reads: `List applications`, `List application stages`, `List candidates`,
+`List attachments`, `List candidate tags`, `List applied candidate tags`,
+`List notes`, `List jobs`, `List job posts`, `List job interview stages`,
+`List rejection reasons`, `List scorecards`, `List interviews`, `List users`,
+`List user job permissions`.
+Writes: `Move applications`, `Reject applications`, `Unreject applications`,
+`Create notes`, `Create applied candidate tags`.
+
+`List application stages` is unused — stages resolve via `/job_interview_stages`
+plus the application's own `stage_id` — and can be revoked.
+
+Not granted, and deliberately so: every create/destroy/update scope beyond the
+five writes above. There is also no destroy-notes scope, which is why the two
+notes created during write probing could not be cleaned up by this credential.
+
+## Human dependencies — resolved
 
 1. **New credentials.** v3 needs a client ID and secret created by someone with
    *"Can manage ALL organization's API Credentials"*, with **scopes granted per
@@ -278,41 +304,79 @@ These gate everything and are not engineering work.
 3. **Greenhouse's credential export** (April 2026 release) lists existing API
    credentials — use it to confirm nothing else in the org still depends on v1.
 
-## Verification
+## Verification — current state
 
-- `tests/` currently mocks v1 shapes with `respx`. Those fixtures encode the old
-  contract; update them alongside each endpoint or they will keep passing while
-  production breaks.
-- Add a test asserting no `harvest.greenhouse.io/v1` string remains in `src/`.
-- Make projection strict (see [Silent failure mode](#silent-failure-mode)) before
-  migrating endpoints, so a missed rename fails a test instead of quietly emptying
-  a record.
-- `extension-uv/smoke_test.py` only checks that tools *register*. It cannot catch a
-  broken endpoint — it uses a fake key and never reaches the API. Do not treat a
-  green bundle build as evidence the migration works.
-- Real end-to-end verification needs live credentials against a real Greenhouse
-  instance. Note the sandbox is Pro-plan only; Core and Plus test against live data,
-  so prefer read-only tools first and be careful with the WRITE endpoints.
+Run it:
+
+    op run --env-file=env.op -- .venv/bin/python scripts/verify_v3.py
+    # add --writes for the path-id write probe (safe; see below)
+
+**Verified live (2026-08-31):** token exchange, cursor paging, `/jobs`,
+`/applications`, `/candidates`, `/job_interview_stages`, `/attachments`, and
+nine read tools end-to-end — `get_job`, `get_candidate`, `get_application`,
+`list_job_stages_for_job`, `list_scorecards_for_application`,
+`get_activity_feed`, `read_candidate_resume`, `pipeline_summary`,
+`screen_candidate`.
+
+**Not verified:** any write actually taking effect. Route existence is confirmed
+for `move`, `reject` and `unreject`; body schemas for notes and tags were learned
+from validation errors and are pinned by tests. Nobody has yet watched a stage
+move or a rejection record correctly. `reject_application` is the weakest — the
+guide documents `PATCH /rejection_details/{id}` but never rejection *creation*.
+
+**A green test suite is not evidence.** The fixtures assert the contract as we
+understand it, and that understanding was wrong three separate times: the
+nested-path removal, the plural filters, and the write bodies. Each was caught
+only by a real request. `extension-uv/smoke_test.py` is weaker still — it uses a
+fake credential and never reaches the API.
+
+**Sandbox.** Confirmed Pro-tier only ([Use a sandbox](https://support.greenhouse.io/hc/en-us/articles/17053185557787-Use-a-sandbox)).
+Harvest credentials themselves work on Core, Plus and Pro; the sandbox is the
+part that is gated. A sandbox is a distinct, empty instance — not a copy of
+production — so it needs its own credentials, its own job board token, and its
+own seeded data. It is the only clean way to finish write verification.
 
 ## Open questions
 
 1. **Are the Job Board and Ingestion APIs affected?** `BOARD_BASE`
    (`boards-api.greenhouse.io/v1/boards`, 13 tools) and `INGESTION_BASE`
-   (`api.greenhouse.io/v1/partner`, 6 tools) are separate products that also carry
-   `/v1` in the path. Re-read 2026-08-30: the Harvest API overview says only
-   "Harvest API v1 and v2 will be deprecated and unavailable after August 31,
-   2026" and does not mention either product. That is an *absence* of a notice,
+   (`api.greenhouse.io/v1/partner`, 6 tools) are separate products that also
+   carry `/v1`. The sunset notice names Harvest only — an *absence* of a notice,
    not an assurance. Both were left on v1 and excluded from the v3 tool gate, so
-   if this assumption is wrong those 19 tools break — loudly, with 404s, which is
-   the acceptable failure. **Still worth confirming with Greenhouse support.**
+   if this is wrong those 19 tools fail loudly with 404s. **Still worth
+   confirming with Greenhouse support.**
 2. ~~**Does `/jobs/{id}/stages` become `/v3/job_interview_stages`?**~~
-   **Resolved 2026-08-31.** Two independent signals: the scope Greenhouse grants
-   is named "Job interview stages", and the migration guide says resolving a
-   stage name requires that endpoint. All three callers were moved to
-   `/job_interview_stages?job_id=`.
-3. **Is there a v1 fallback window?** If v3 access can be obtained before the
-   cutoff, running both briefly would de-risk the switch. Unknown whether both
-   credential types can be active at once.
-4. **Rate-limit budget for the new multi-call patterns.** `current_stage` and
-   `attachments` becoming separate endpoints turns one call into three for common
-   screening flows, against a stricter window.
+   **Resolved 2026-08-31**, live: it does, and the filter is plural `job_ids`.
+3. ~~**Is there a v1 fallback window?**~~ **Moot** — v1 is off as of
+   2026-09-01.
+4. **Rate-limit budget.** Stage and attachment lookups are now separate calls.
+   Mitigated by fetching stages once per *job* (cached) rather than per
+   application, and by `/attachments?candidate_ids=` needing no application hop.
+   Not yet measured against a real pipeline scan under v3's 30s window —
+   `scan_pipeline_resumes` over a large job is the case to watch.
+5. **Do writes actually do the right thing?** Unresolved and only a sandbox
+   closes it. See [Verification](#verification--current-state).
+6. **Is the credential bound to a person?** Greenhouse recommends an Integration
+   System User for v3 credentials, because a personal binding breaks the
+   integration when that person is deactivated — which, given the startup guard
+   added in this migration, would take the connector down for everyone.
+
+## Incidents
+
+**2026-09-01 — two orphaned notes created in production.** Write probing pointed
+requests at an id confirmed absent, on the reasoning that a write with no target
+record cannot mutate anything. That holds for writes whose id is in the *path*.
+It does not hold for writes whose id is in the *body*: Greenhouse does not
+validate that `candidate_id` refers to a real candidate, so `POST /notes`
+created a row anyway. One id was captured, the other was not, and neither is
+reachable through `/notes?candidate_ids=` or a `created_at[gte]` sweep. The
+specific ids are recorded outside this repo. **v3 has no `DELETE /notes/{id}`** — the route returns
+404 with no handler — so they cannot be removed through the API. Removal needs
+the Greenhouse UI.
+
+Contributing error: after the first unexpected success, the identical request
+was re-issued to inspect the response body, creating the second note. On an
+unexpected write, stop; do not repeat the call to study it.
+
+The probe no longer sends body-id writes at all. Their schemas must come from
+documentation or a sandbox.
