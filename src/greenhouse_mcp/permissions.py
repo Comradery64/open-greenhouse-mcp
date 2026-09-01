@@ -29,7 +29,7 @@ async def resolve_user_permissions(
 
     Raises ValueError if the user is not found or is disabled.
     """
-    user = await client.harvest_get_one(f"/users/{user_id}")
+    user = await client.harvest_get_by_id("/users", user_id)
 
     if GreenhouseClient._is_error(user):
         raise ValueError(
@@ -67,7 +67,10 @@ async def resolve_user_permissions(
         )
 
     # Non-admin: fetch job permissions
-    job_perms = await client.harvest_get(f"/users/{user_id}/permissions/jobs", paginate="all")
+    # v3 removed the nested path; job permissions are their own collection.
+    job_perms = await client.harvest_get(
+        "/user_job_permissions", params={"user_ids": user_id}, paginate="all"
+    )
     items = job_perms.get("items", [])
     job_ids = {item["job_id"] for item in items if "job_id" in item}
 

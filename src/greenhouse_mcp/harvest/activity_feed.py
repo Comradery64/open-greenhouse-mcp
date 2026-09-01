@@ -20,4 +20,8 @@ async def get_activity_feed(
     To find candidate_id: search_candidates_by_name. Returns notes, emails,
     stage changes, and other timeline events in chronological order.
     """
-    return await client.harvest_get_one(f"/candidates/{candidate_id}/activity_feed")
+    # v3 removed /candidates/{id}/activity_feed. Notes are the part recruiters
+    # read, and they now live in their own collection.
+    return await client.harvest_get(
+        "/notes", params={"candidate_ids": candidate_id, "per_page": 500}
+    )

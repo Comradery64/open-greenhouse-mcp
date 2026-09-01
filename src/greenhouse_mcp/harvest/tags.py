@@ -62,7 +62,9 @@ async def list_tags_on_candidate(
 
     To find candidate_id: search_candidates_by_name.
     """
-    return await client.harvest_get(f"/candidates/{candidate_id}/tags")
+    return await client.harvest_get(
+        "/applied_candidate_tags", params={"candidate_ids": candidate_id, "per_page": 500}
+    )
 
 
 async def add_tag_to_candidate(
@@ -77,7 +79,12 @@ async def add_tag_to_candidate(
     candidate_id: search_candidates_by_name. For tag_id: list_tags → match
     by name. For bulk tagging, use bulk_tag instead.
     """
-    return await client.harvest_put(f"/candidates/{candidate_id}/tags/{tag_id}")
+    # v3: both ids move from the path into the body of a POST.
+    # Unverified — writes were not exercised against a live instance.
+    return await client.harvest_post(
+        "/applied_candidate_tags",
+        json_data={"candidate_id": candidate_id, "tag_id": tag_id},
+    )
 
 
 async def remove_tag_from_candidate(

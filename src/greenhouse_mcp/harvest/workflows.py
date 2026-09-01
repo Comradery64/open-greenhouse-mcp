@@ -74,7 +74,7 @@ async def pipeline_summary(
     errors: list[dict[str, Any]] = []
 
     # Get job details
-    job = await client.harvest_get_one(f"/jobs/{job_id}")
+    job = await client.harvest_get_by_id("/jobs", job_id)
     if "error" in job and "status_code" in job:
         return job  # Can't continue without the job
 
@@ -272,7 +272,7 @@ async def candidates_needing_action(
 
     # Check for interviews needing scorecards (recent interviews only)
     interviews_result = await client.harvest_get(
-        "/scheduled_interviews", params={"per_page": 100}, paginate="single"
+        "/interviews", params={"per_page": 100}, paginate="single"
     )
     if not ("error" in interviews_result and "status_code" in interviews_result):
         for interview in interviews_result.get("items", []):

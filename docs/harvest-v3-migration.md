@@ -1,6 +1,8 @@
 # Harvest v3 migration — handoff
 
-**Status:** Phase A implemented, **not verified against a live Greenhouse instance.**
+**Status:** Phase A implemented; **reads verified against a live instance
+2026-08-31. Writes remain unverified** — they were deliberately not exercised
+against production data.
 **Hard deadline:** Harvest **v1 and v2** are unavailable after **2026-08-31**.
 **Written:** 2026-08-18. **Phase A implemented:** 2026-08-30.
 
@@ -14,6 +16,39 @@ only against the documentation, not against Greenhouse.
 [Verification](#verification) steps. A green test suite is not evidence — the
 fixtures assert the contract as documented, which is exactly the thing that
 might be wrong.
+
+### The v3 shape, established by probing a live instance
+
+The migration guides describe renames but not the structural changes. All of
+the following were found by probing, and each one is a 404 or 422 away from a
+silent or noisy failure:
+
+| Rule | Evidence |
+|---|---|
+| No `/{collection}/{id}` show endpoints | `GET /jobs/{id}` 404s on an id `/jobs` just returned. Use `?ids=`. |
+| No nested paths | `/jobs/{id}/job_posts`, `/applications/{id}/scorecards`, `/candidates/{id}/activity_feed`, `/users/{id}/permissions/jobs` all 404 |
+| Cross-reference filters are plural | `candidate_id` → 422; `candidate_ids` works |
+| A collection filtered on itself uses `ids` | `candidate_ids` on `/candidates` → 422 |
+| Date ranges use bracket comparisons | `created_at[gte]`, `[lte]`; every `*_after`/`*_before` → 422 |
+| `/jobs` keeps singular `department_id`/`office_id` | inconsistent with every other collection |
+| Writes keep ids in the path | `POST /applications/{id}/move` — only reads went flat |
+
+Replacements, all confirmed returning 200:
+`/jobs/{id}/job_posts` → `/job_posts?job_ids=`,
+`/applications/{id}/scorecards` → `/scorecards?application_ids=`,
+`/candidates/{id}/activity_feed` → `/notes?candidate_ids=`,
+`/scheduled_interviews` → `/interviews`,
+`/users/{id}/permissions/jobs` → `/user_job_permissions?user_ids=`,
+`/candidates/{id}/tags` → `/applied_candidate_tags?candidate_ids=`.
+
+**A 422 is ambiguous** — it means an invalid parameter *name* or an invalid
+*value*. The response body distinguishes them (`Invalid query params: x`).
+Reading only the status code produces false negatives; one early probe did
+exactly that.
+
+**A 200 is not proof a filter works.** Date filters were confirmed by asking
+for a far-future bound and checking the row count actually dropped, since a
+silently-ignored filter also returns 200.
 
 ### What Phase A changed
 

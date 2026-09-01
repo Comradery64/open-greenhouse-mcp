@@ -398,6 +398,32 @@ class GreenhouseClient:
         """Harvest GET for a single resource — returns the object directly."""
         return await self._harvest_simple("GET", endpoint, params=params)
 
+    async def harvest_get_by_id(
+        self,
+        collection: str,
+        resource_id: Any,
+    ) -> dict[str, Any]:
+        """Fetch one record from a collection by id.
+
+        v3 has no `/{collection}/{id}` show endpoints — they return 404 even for
+        an id the list endpoint just handed out. A single record is retrieved by
+        filtering the collection on `ids`. Verified against a live instance for
+        /jobs, /candidates and /applications.
+
+        Returns the record, or a 404-shaped error when the id matches nothing,
+        so callers keep the same success/error contract they had under v1.
+        """
+        result = await self.harvest_get(collection, params={"ids": resource_id})
+        if self._is_error(result):
+            return result
+        items = result.get("items", [])
+        if not items:
+            return self._error_dict(404, {"message": "Resource not found"}, collection)
+        first = items[0]
+        if not isinstance(first, dict):
+            return self._error_dict(502, {"message": "Unexpected record shape"}, collection)
+        return first
+
     async def harvest_post(
         self,
         endpoint: str,

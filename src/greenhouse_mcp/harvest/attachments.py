@@ -86,7 +86,7 @@ async def read_candidate_resume(
     candidate_id: search_candidates_by_name. Returns extracted text from
     the most recent resume attachment. For batch reading, use batch_read_resumes.
     """
-    candidate = await client.harvest_get_one(f"/candidates/{candidate_id}")
+    candidate = await client.harvest_get_by_id("/candidates", candidate_id)
     if _is_error(candidate):
         return candidate
 

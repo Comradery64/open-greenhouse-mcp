@@ -45,7 +45,7 @@ async def test_list_jobs_with_filters(client: GreenhouseClient) -> None:
 async def test_get_job(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.jobs import get_job
 
-    respx.get(f"{HARVEST_BASE}/jobs/42").mock(
+    respx.get(f"{HARVEST_BASE}/jobs").mock(
         return_value=httpx.Response(200, json={"id": 42, "name": "Designer"})
     )
     result = await get_job(client, job_id=42)

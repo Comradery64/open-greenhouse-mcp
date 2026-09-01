@@ -173,7 +173,7 @@ async def screen_candidate(
     screening answers, job description, and application history in one call.
     """
     # Step a: Fetch application
-    application = await client.harvest_get_one(f"/applications/{application_id}")
+    application = await client.harvest_get_by_id("/applications", application_id)
     if "error" in application and "status_code" in application:
         return {"error": f"Failed to fetch application {application_id}", "detail": application}
 
@@ -189,9 +189,9 @@ async def screen_candidate(
     job_name = jobs[0].get("name", "Unknown") if jobs else "Unknown"
 
     # Step c: Parallel fetch — candidate + job posts
-    coros: list[Any] = [client.harvest_get_one(f"/candidates/{candidate_id}")]
+    coros: list[Any] = [client.harvest_get_by_id("/candidates", candidate_id)]
     if job_id:
-        coros.append(client.harvest_get(f"/jobs/{job_id}/job_posts", params={"per_page": 1}))
+        coros.append(client.harvest_get("/job_posts", params={"job_ids": job_id, "per_page": 1}))
 
     results = await asyncio.gather(*coros)
     candidate = results[0]
@@ -254,7 +254,7 @@ async def screen_candidate(
     # Step h: Build application history
     # v3: applications are no longer nested on the candidate.
     cand_apps = await client.harvest_get(
-        "/applications", params={"candidate_id": candidate_id, "per_page": 500}
+        "/applications", params={"candidate_ids": candidate_id, "per_page": 500}
     )
     if "error" in cand_apps and "status_code" in cand_apps:
         return cand_apps

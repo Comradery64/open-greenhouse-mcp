@@ -73,7 +73,7 @@ async def get_job(
     Use list_jobs to find the job_id by name first. For the public listing, use
     list_job_posts_for_job. For pipeline stages, use list_job_stages_for_job.
     """
-    return await client.harvest_get_one(f"/jobs/{job_id}")
+    return await client.harvest_get_by_id("/jobs", job_id)
 
 
 async def create_job(

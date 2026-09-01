@@ -99,9 +99,11 @@ async def bulk_tag(
     failures: list[dict[str, Any]] = []
 
     for cid in candidate_ids:
-        result = await client.harvest_put(
-            f"/candidates/{cid}/tags",
-            json_data={"tag": tag_name},
+        # v3: applying a tag is a POST to its own collection, with the candidate
+        # in the body. Unverified — writes were not run against a live instance.
+        result = await client.harvest_post(
+            "/applied_candidate_tags",
+            json_data={"candidate_id": cid, "tag": tag_name},
         )
         if "error" in result and "status_code" in result:
             failures.append(
@@ -155,7 +157,7 @@ async def bulk_advance(
             json_data["from_stage_id"] = from_stage_id
 
         result = await client.harvest_post(
-            f"/applications/{app_id}/advance",
+            f"/applications/{app_id}/move",
             json_data=json_data if json_data else None,
         )
         if "error" in result and "status_code" in result:

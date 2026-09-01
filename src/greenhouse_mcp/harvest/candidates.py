@@ -79,7 +79,7 @@ async def get_candidate(
     search_candidates_by_name. For a screening package with resume and
     location, use screen_candidate.
     """
-    return await client.harvest_get_one(f"/candidates/{candidate_id}")
+    return await client.harvest_get_by_id("/candidates", candidate_id)
 
 
 async def create_candidate(
@@ -455,7 +455,9 @@ async def add_note_to_candidate(
     """
     json_data: dict[str, Any] = {"body": body, "visibility": visibility}
     return await client.harvest_post(
-        f"/candidates/{candidate_id}/activity_feed/notes", json_data=json_data
+        # v3: notes are a top-level collection and the candidate id moves into
+        # the body. Unverified — writes were not exercised against a live instance.
+        "/notes", json_data={**json_data, "candidate_id": candidate_id}
     )
 
 

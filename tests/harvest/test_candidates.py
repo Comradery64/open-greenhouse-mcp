@@ -43,7 +43,7 @@ async def test_list_candidates_with_filters(client: GreenhouseClient) -> None:
 async def test_get_candidate(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.candidates import get_candidate
 
-    respx.get(f"{HARVEST_BASE}/candidates/42").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json={"id": 42, "first_name": "Bob"})
     )
     result = await get_candidate(client, candidate_id=42)
@@ -186,7 +186,8 @@ async def test_add_attachment(client: GreenhouseClient) -> None:
 async def test_add_note_to_candidate(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.candidates import add_note_to_candidate
 
-    respx.post(f"{HARVEST_BASE}/candidates/42/activity_feed/notes").mock(
+    # v3: notes are their own collection; the candidate id moves to the body.
+    respx.post(f"{HARVEST_BASE}/notes").mock(
         return_value=httpx.Response(201, json={"body": "Great candidate", "visibility": "private"})
     )
     result = await add_note_to_candidate(client, candidate_id=42, body="Great candidate")
@@ -237,7 +238,7 @@ async def test_list_candidates_error(client: GreenhouseClient) -> None:
 async def test_get_candidate_not_found(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.candidates import get_candidate
 
-    respx.get(f"{HARVEST_BASE}/candidates/9999").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(404, json={"message": "Not found"})
     )
     result = await get_candidate(client, candidate_id=9999)

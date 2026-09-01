@@ -324,15 +324,15 @@ async def test_assembles_complete_screening_package(client: GreenhouseClient) ->
     from greenhouse_mcp.harvest.screening import screen_candidate
 
     # Mock application
-    respx.get(f"{HARVEST_BASE}/applications/100").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=_mock_application())
     )
     # Mock candidate
-    respx.get(f"{HARVEST_BASE}/candidates/200").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=_mock_candidate())
     )
     # Mock job posts
-    respx.get(f"{HARVEST_BASE}/jobs/300/job_posts").mock(
+    respx.get(f"{HARVEST_BASE}/job_posts").mock(
         return_value=httpx.Response(200, json=_mock_job_posts_html())
     )
 
@@ -380,7 +380,7 @@ async def test_assembles_complete_screening_package(client: GreenhouseClient) ->
 async def test_handles_application_not_found(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import screen_candidate
 
-    respx.get(f"{HARVEST_BASE}/applications/9999").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(404, json={"message": "Not found"})
     )
 
@@ -399,13 +399,13 @@ async def test_handles_no_resume(client: GreenhouseClient) -> None:
         {"type": "cover_letter", "url": "https://example.com/cl.pdf", "filename": "cl.pdf"}
     ]
 
-    respx.get(f"{HARVEST_BASE}/applications/100").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=_mock_application())
     )
-    respx.get(f"{HARVEST_BASE}/candidates/200").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=candidate)
     )
-    respx.get(f"{HARVEST_BASE}/jobs/300/job_posts").mock(
+    respx.get(f"{HARVEST_BASE}/job_posts").mock(
         return_value=httpx.Response(200, json=_mock_job_posts_html())
     )
 
@@ -420,13 +420,13 @@ async def test_handles_no_job_posts(client: GreenhouseClient) -> None:
     from greenhouse_mcp.harvest.screening import screen_candidate
     mock_v3_side_calls(applications=[])
 
-    respx.get(f"{HARVEST_BASE}/applications/100").mock(
+    respx.get(f"{HARVEST_BASE}/applications").mock(
         return_value=httpx.Response(200, json=_mock_application())
     )
-    respx.get(f"{HARVEST_BASE}/candidates/200").mock(
+    respx.get(f"{HARVEST_BASE}/candidates").mock(
         return_value=httpx.Response(200, json=_mock_candidate())
     )
-    respx.get(f"{HARVEST_BASE}/jobs/300/job_posts").mock(
+    respx.get(f"{HARVEST_BASE}/job_posts").mock(
         return_value=httpx.Response(200, json=[])
     )
 

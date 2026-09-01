@@ -81,7 +81,7 @@ async def get_application(
     get_candidate → the applications array has each application's ID and job name.
     For a complete screening package with resume and location, use screen_candidate.
     """
-    return await client.harvest_get_one(f"/applications/{application_id}")
+    return await client.harvest_get_by_id("/applications", application_id)
 
 
 async def create_application(
@@ -205,7 +205,7 @@ async def advance_application(
     json_data: dict[str, Any] = {"from_stage_id": from_stage_id}
     if to_stage_id is not None:
         json_data["to_stage_id"] = to_stage_id
-    return await client.harvest_post(f"/applications/{application_id}/advance", json_data=json_data)
+    return await client.harvest_post(f"/applications/{application_id}/move", json_data=json_data)
 
 
 async def move_application(
