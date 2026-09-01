@@ -56,25 +56,20 @@ def mock_resume_chain(candidates, *, pipeline_applications=None, stages=None):
     endpoints v3 requires from that same data, so a test states its candidates
     once and does not have to hand-maintain three consistent payloads.
 
-    One synthetic application per candidate (`id * 10 + 1`) is enough: the code
-    under test only uses the id to look attachments up.
+    Verified against a live instance: `/attachments?candidate_ids=` returns that
+    candidate's attachments directly, so no application hop is involved.
     """
     import httpx
     import respx
 
-    app_for = {c["id"]: c["id"] * 10 + 1 for c in candidates if "id" in c}
-    atts_for = {app_for[c["id"]]: c.get("attachments", []) for c in candidates if "id" in c}
+    atts_for = {c["id"]: c.get("attachments", []) for c in candidates if "id" in c}
 
     def _applications(request):
-        raw = request.url.params.get("candidate_id")
-        if raw is None:
-            # The tool's own pipeline query, not the per-candidate lookup.
-            return httpx.Response(200, json=pipeline_applications or [])
-        app_id = app_for.get(int(raw))
-        return httpx.Response(200, json=[{"id": app_id, "jobs": []}] if app_id else [])
+        return httpx.Response(200, json=pipeline_applications or [])
 
     def _attachments(request):
-        raw = request.url.params.get("application_id")
+        # v3 filters attachments by candidate directly (plural `candidate_ids`).
+        raw = request.url.params.get("candidate_ids")
         return httpx.Response(200, json=atts_for.get(int(raw), []) if raw else [])
 
     respx.get(f"{HARVEST_BASE}/applications").mock(side_effect=_applications)

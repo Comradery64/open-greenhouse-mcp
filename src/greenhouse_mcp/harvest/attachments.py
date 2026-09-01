@@ -1,30 +1,24 @@
 """Harvest API — Attachment reading tools (2 tools).
 
 Harvest v3 removed `attachments` from the candidate object, so a resume can no
-longer be read from a candidate in one call. It now takes three: candidate →
-their applications → that application's attachments. `_fetch_candidate_resumes`
-is the single place that knows this, because four call sites across three
-modules used to read `candidate["attachments"]` directly.
+longer be read from a candidate in one call. `/attachments` filters by
+`candidate_ids`, so it costs one extra call rather than one per application.
+`_fetch_candidate_resumes` is the single place that knows this, because four
+call sites across three modules used to read `candidate["attachments"]`.
 
-**Unverified.** The filter parameter names (`candidate_id`, `application_id`) and
-the attachment field names (`type`, `url`, `filename`) are taken from the
-migration guide, which documents the move but not the schema. Nothing here has
-been run against a live Greenhouse instance — see docs/harvest-v3-migration.md.
+Verified against a live instance 2026-08-31: `/attachments?candidate_ids=` is
+accepted, and the records carry `type`, `url` and `filename`. Note the filter is
+plural — `application_id` and `candidate_id` are both rejected with a 422.
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import Annotated, Any
 
 from pydantic import Field
 
 from greenhouse_mcp.client import GreenhouseClient
 from greenhouse_mcp.errors import build_error
-
-# Attachment listing is now per-application, so a pipeline scan multiplies calls
-# against a stricter v3 rate-limit window. Small gap between applications.
-_INTER_APP_DELAY = 0.1
 
 
 def _is_error(payload: Any) -> bool:
@@ -34,8 +28,6 @@ def _is_error(payload: Any) -> bool:
 async def _fetch_candidate_resumes(
     client: GreenhouseClient,
     candidate_id: int,
-    *,
-    max_applications: int = 10,
 ) -> dict[str, Any]:
     """Return `{"resumes": [...]}` for a candidate, or a structured error.
 
@@ -45,35 +37,26 @@ async def _fetch_candidate_resumes(
     the silent failure this migration is trying to avoid. That case returns an
     error instead of an empty list.
     """
-    apps = await client.harvest_get(
-        "/applications", params={"candidate_id": candidate_id, "per_page": 500}
+    # /attachments filters by candidate directly, so the applications hop this
+    # once needed is unnecessary — one call per candidate, not one per
+    # application, which matters against v3's stricter rate-limit window.
+    page = await client.harvest_get(
+        "/attachments", params={"candidate_ids": candidate_id, "per_page": 500}
     )
-    if _is_error(apps):
-        return apps
+    if _is_error(page):
+        return page
 
-    app_items = [a for a in apps.get("items", []) if isinstance(a, dict)]
     resumes: list[dict[str, Any]] = []
     seen_attachments = 0
     seen_typed = 0
-
-    for app in app_items[:max_applications]:
-        app_id = app.get("id")
-        if app_id is None:
+    for att in page.get("items", []):
+        if not isinstance(att, dict):
             continue
-        page = await client.harvest_get(
-            "/attachments", params={"application_id": app_id, "per_page": 500}
-        )
-        if _is_error(page):
-            return page
-        for att in page.get("items", []):
-            if not isinstance(att, dict):
-                continue
-            seen_attachments += 1
-            if "type" in att:
-                seen_typed += 1
-                if att.get("type") == "resume":
-                    resumes.append(att)
-        await asyncio.sleep(_INTER_APP_DELAY)
+        seen_attachments += 1
+        if "type" in att:
+            seen_typed += 1
+            if att.get("type") == "resume":
+                resumes.append(att)
 
     if seen_attachments and not seen_typed:
         return build_error(
@@ -84,7 +67,7 @@ async def _fetch_candidate_resumes(
             "/attachments",
         )
 
-    return {"resumes": resumes, "applications_checked": len(app_items[:max_applications])}
+    return {"resumes": resumes, "attachments_seen": seen_attachments}
 
 
 def _latest_resume(resumes: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -117,7 +100,7 @@ async def read_candidate_resume(
             "error": "No resume found for this candidate.",
             "candidate_id": candidate_id,
             "candidate_name": f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}",
-            "applications_checked": found["applications_checked"],
+            "attachments_seen": found["attachments_seen"],
         }
 
     resume = _latest_resume(resumes) or {}

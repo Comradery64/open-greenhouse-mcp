@@ -39,9 +39,9 @@ async def list_job_stages_for_job(
     find the job_id first: list_jobs → match by name.
     """
     # v3 replaced the job-scoped /jobs/{id}/stages with a filtered top-level
-    # collection. The scope Greenhouse grants for it is "Job interview stages".
+    # collection. The filter is plural `job_ids`; `job_id` returns a 422.
     return await client.harvest_get(
-        "/job_interview_stages", params={"job_id": job_id, "per_page": 500}
+        "/job_interview_stages", params={"job_ids": job_id, "per_page": 500}
     )
 
 
@@ -55,7 +55,7 @@ async def _stage_names_for_job(client: GreenhouseClient, job_id: int) -> dict[in
     rate-limit window.
     """
     result = await client.harvest_get_cached(
-        "/job_interview_stages", params={"job_id": job_id, "per_page": 500}
+        "/job_interview_stages", params={"job_ids": job_id, "per_page": 500}
     )
     if "error" in result and "status_code" in result:
         return {}

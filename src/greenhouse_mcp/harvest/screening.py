@@ -353,7 +353,7 @@ async def _resolve_candidate_names(
         ids_param = ",".join(str(cid) for cid in chunk)
         result = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in result and "status_code" in result:

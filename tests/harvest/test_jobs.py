@@ -154,7 +154,8 @@ async def test_list_job_stages_for_job(client: GreenhouseClient) -> None:
     )
     result = await list_job_stages_for_job(client, job_id=42)
     assert result["items"][0]["name"] == "Phone Screen"
-    assert route.calls[0].request.url.params["job_id"] == "42"
+    # v3 filters by the plural name; `job_id` is rejected with a 422.
+    assert route.calls[0].request.url.params["job_ids"] == "42"
 
 
 @respx.mock

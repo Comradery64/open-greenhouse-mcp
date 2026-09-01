@@ -54,17 +54,17 @@ async def list_applications(
     """
     params: dict[str, Any] = {"per_page": per_page}
     if job_id is not None:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
     if candidate_id is not None:
-        params["candidate_id"] = candidate_id
+        params["candidate_ids"] = candidate_id
     if status is not None:
         params["status"] = status
     if created_after is not None:
-        params["created_after"] = created_after
+        params["created_at[gte]"] = created_after
     if created_before is not None:
-        params["created_before"] = created_before
+        params["created_at[lte]"] = created_before
     if last_activity_after is not None:
-        params["last_activity_after"] = last_activity_after
+        params["last_activity_at[gte]"] = last_activity_after
     return await client.harvest_get(
         "/applications", params=params, paginate=paginate, cursor=cursor
     )

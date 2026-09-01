@@ -41,7 +41,7 @@ async def _resolve_candidate_names(
         ids_param = ",".join(str(cid) for cid in chunk)
         result = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in result and "status_code" in result:
@@ -81,7 +81,7 @@ async def pipeline_summary(
     # Get stages for this job
     stages_result = await client.harvest_get(
         "/job_interview_stages",
-        params={"job_id": job_id, "per_page": 500},
+        params={"job_ids": job_id, "per_page": 500},
         paginate="single",
     )
     stages_list = stages_result.get("items", [])
@@ -93,7 +93,7 @@ async def pipeline_summary(
         result = await client.harvest_get(
             "/applications",
             params=None if cursor else {
-                "job_id": job_id,
+                "job_ids": job_id,
                 "status": "active",
                 "per_page": 500,
             },
@@ -205,7 +205,7 @@ async def candidates_needing_action(
     # Fetch active applications
     params: dict[str, Any] = {"status": "active", "per_page": 500}
     if job_id:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
 
     all_apps: list[dict[str, Any]] = []
     cursor: str | None = None
@@ -327,7 +327,7 @@ async def stale_applications(
     errors: list[dict[str, Any]] = []
     params: dict[str, Any] = {"status": "active", "per_page": 500}
     if job_id:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
 
     all_apps: list[dict[str, Any]] = []
     stale_apps_raw: list[tuple[dict[str, Any], int]] = []
