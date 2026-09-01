@@ -29,7 +29,7 @@ async def resolve_user_permissions(
 
     Raises ValueError if the user is not found or is disabled.
     """
-    user = await client.harvest_get_one(f"/users/{user_id}")
+    user = await client.harvest_get_by_id("/users", user_id)
 
     if GreenhouseClient._is_error(user):
         raise ValueError(
@@ -37,10 +37,20 @@ async def resolve_user_permissions(
             f"Check that GREENHOUSE_USER_ID is a valid Greenhouse user ID."
         )
 
-    if user.get("disabled", False):
+    # v3 renamed `disabled` to `deactivated`. Reading the old name here was a
+    # silently dead guard: the absent key defaulted to False, so a deactivated
+    # user passed a check that is supposed to refuse startup. Fail closed if
+    # neither key is present rather than assuming the account is active.
+    if "deactivated" not in user and "disabled" not in user:
         raise ValueError(
-            f"User {user_id} ({user.get('name', 'unknown')}) is disabled in Greenhouse. "
-            f"Cannot start MCP server for a disabled user."
+            f"Cannot determine whether user {user_id} is active: the Greenhouse "
+            f"response carried neither `deactivated` nor `disabled`. Refusing to "
+            f"start rather than assume the account is active."
+        )
+    if user.get("deactivated", user.get("disabled", False)):
+        raise ValueError(
+            f"User {user_id} ({user.get('name', 'unknown')}) is deactivated in "
+            f"Greenhouse. Cannot start MCP server for a deactivated user."
         )
 
     is_admin = user.get("site_admin", False)
@@ -49,7 +59,7 @@ async def resolve_user_permissions(
         return UserPermissions(
             user_id=user_id,
             name=user.get("name", ""),
-            email=user.get("primary_email_address", ""),
+            email=user.get("primary_email", user.get("primary_email_address", "")),
             site_admin=True,
             disabled=False,
             profile="full",
@@ -57,7 +67,10 @@ async def resolve_user_permissions(
         )
 
     # Non-admin: fetch job permissions
-    job_perms = await client.harvest_get(f"/users/{user_id}/permissions/jobs", paginate="all")
+    # v3 removed the nested path; job permissions are their own collection.
+    job_perms = await client.harvest_get(
+        "/user_job_permissions", params={"user_ids": user_id}, paginate="all"
+    )
     items = job_perms.get("items", [])
     job_ids = {item["job_id"] for item in items if "job_id" in item}
 
@@ -65,7 +78,7 @@ async def resolve_user_permissions(
         return UserPermissions(
             user_id=user_id,
             name=user.get("name", ""),
-            email=user.get("primary_email_address", ""),
+            email=user.get("primary_email", user.get("primary_email_address", "")),
             site_admin=False,
             disabled=False,
             profile="recruiter",
@@ -75,7 +88,7 @@ async def resolve_user_permissions(
     return UserPermissions(
         user_id=user_id,
         name=user.get("name", ""),
-        email=user.get("primary_email_address", ""),
+        email=user.get("primary_email", user.get("primary_email_address", "")),
         site_admin=False,
         disabled=False,
         profile="read-only",

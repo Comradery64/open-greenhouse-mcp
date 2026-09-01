@@ -14,6 +14,10 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from greenhouse_mcp.client import GreenhouseClient
+from greenhouse_mcp.harvest.attachments import (
+    _fetch_candidate_resumes,
+    _latest_resume,
+)
 from greenhouse_mcp.resume_parser import extract_resume_text as _extract_resume_text
 
 # ─── Private helpers ──────────────────────────────────────────────────
@@ -319,7 +323,7 @@ async def _collect_pipeline_candidate_ids(
     for job_id in job_ids:
         result = await client.harvest_get(
             "/applications",
-            params={"per_page": 500, "job_id": job_id},
+            params={"per_page": 500, "job_ids": job_id},
             paginate="all",
         )
         if "error" in result and "status_code" in result:
@@ -390,7 +394,7 @@ async def search_pipeline_candidates(
         ids_param = ",".join(str(cid) for cid in chunk)
         result = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in result and "status_code" in result:
@@ -464,14 +468,15 @@ async def scan_all_candidates(
 
     params: dict[str, Any] = {"per_page": 500}
     if updated_after:
-        params["updated_after"] = updated_after
+        params["updated_at[gte]"] = updated_after
 
-    for page_num in range(1, max_pages + 1):
-        params["page"] = page_num
+    cursor: str | None = None
+    for _page_num in range(1, max_pages + 1):
         result = await client.harvest_get(
             "/candidates",
-            params=params,
+            params=None if cursor else params,
             paginate="single",
+            cursor=cursor,
         )
         if "error" in result and "status_code" in result:
             break
@@ -507,7 +512,8 @@ async def scan_all_candidates(
             break
 
         # Only delay if there are more pages to fetch
-        if result.get("has_next"):
+        cursor = result.get("next_cursor")
+        if result.get("has_next") and cursor:
             await asyncio.sleep(0.25)
         else:
             break
@@ -547,7 +553,7 @@ async def batch_read_resumes(
         ids_param = ",".join(str(cid) for cid in chunk)
         resp = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in resp and "status_code" in resp:
@@ -579,8 +585,11 @@ async def batch_read_resumes(
         last = candidate.get("last_name", "")
         name = f"{first} {last}".strip()
 
-        attachments = candidate.get("attachments", [])
-        resume_atts = [a for a in attachments if a.get("type") == "resume"]
+        # v3: attachments live on applications, not the candidate.
+        found = await _fetch_candidate_resumes(client, cid)
+        if "error" in found and "status_code" in found:
+            return found
+        resume_atts = found["resumes"]
 
         if not resume_atts:
             results.append(
@@ -595,7 +604,7 @@ async def batch_read_resumes(
             continue
 
         # Most recent resume — Greenhouse returns attachments in creation order
-        resume_att = resume_atts[-1]
+        resume_att = _latest_resume(resume_atts) or {}
         filename = resume_att.get("filename", "")
         url = resume_att.get("url", "")
 
@@ -720,7 +729,7 @@ async def scan_pipeline_resumes(
         ids_param = ",".join(str(cid) for cid in chunk)
         resp = await client.harvest_get(
             "/candidates",
-            params={"candidate_ids": ids_param, "per_page": 50},
+            params={"ids": ids_param, "per_page": 50},
             paginate="single",
         )
         if "error" in resp and "status_code" in resp:
@@ -750,13 +759,16 @@ async def scan_pipeline_resumes(
         if candidate is None:
             continue
 
-        attachments = candidate.get("attachments", [])
-        resume_atts = [a for a in attachments if a.get("type") == "resume"]
+        # v3: attachments live on applications, not the candidate.
+        found = await _fetch_candidate_resumes(client, cid)
+        if "error" in found and "status_code" in found:
+            return found
+        resume_atts = found["resumes"]
         if not resume_atts:
             continue
 
         # Most recent resume — Greenhouse returns attachments in creation order
-        resume_att = resume_atts[-1]
+        resume_att = _latest_resume(resume_atts) or {}
         url = resume_att.get("url", "")
         if not url:
             continue

@@ -48,7 +48,10 @@ async def list_scorecards_for_application(
     the application to the job. Returns each interviewer's ratings and overall
     recommendation.
     """
-    return await client.harvest_get(f"/applications/{application_id}/scorecards")
+    # v3 dropped the nested path; filter the flat collection instead.
+    return await client.harvest_get(
+        "/scorecards", params={"application_ids": application_id, "per_page": 500}
+    )
 
 
 async def get_scorecard(
@@ -66,4 +69,4 @@ async def get_scorecard(
     Returns the interviewer's ratings, attribute scores, and overall recommendation.
     To find scorecard IDs: list_scorecards_for_application.
     """
-    return await client.harvest_get_one(f"/scorecards/{scorecard_id}")
+    return await client.harvest_get_by_id("/scorecards", scorecard_id)

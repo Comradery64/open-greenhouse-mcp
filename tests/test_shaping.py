@@ -22,8 +22,13 @@ def _job(i: int, bloat: int = 1) -> dict:
         "status": "open",
         "confidential": False,
         "created_at": "2026-01-05T00:00:00Z",
-        "departments": [{"id": 1, "name": "Engineering", "external_id": "eng-1"}],
-        "offices": [{"id": 2, "name": "Remote", "location": {"name": "Remote"}}],
+        # Harvest v3 shape: scalar department_id, office_ids[] — not the v1
+        # departments[]/offices[] objects.
+        "department_id": 1,
+        "office_ids": [2],
+        "opened_at": "2026-01-06T00:00:00Z",
+        "closed_at": None,
+        "hiring_team": [{"id": 9}],
         "openings": [{"id": j, "custom_fields": {"a": "x" * 80}} for j in range(4)],
         "custom_fields": {"notes": "y" * (600 * bloat)},
         "notes": "n" * (300 * bloat),
@@ -98,7 +103,8 @@ class TestProjection:
         item = shaped["items"][0]
         assert item["openings_count"] == 4
         assert "openings" not in item
-        assert item["departments"] == [{"id": 1, "name": "Engineering"}]
+        assert item["department_id"] == 1
+        assert item["office_ids"] == [2]
 
     def test_identifying_fields_survive(self):
         shaped = shaping.shape_result("list_jobs", _page([_job(i) for i in range(60)]))
@@ -116,7 +122,9 @@ class TestNote:
     def test_truncated_result_tells_the_model_how_to_get_the_rest(self):
         shaped = shaping.shape_result("list_jobs", _page([_job(i) for i in range(500)]))
         note = shaped["result_note"]
-        assert "page" in note
+        # v3 pages by opaque cursor; telling the model to increment `page` would
+        # send it down a path Greenhouse rejects.
+        assert "next_cursor" in note
         assert "department" in note
 
     def test_note_forbids_mentioning_flags_to_the_user(self):
@@ -131,8 +139,13 @@ class TestNote:
 class TestDiagnostics:
     def test_shaping_is_recorded_with_real_byte_counts(self, tmp_path):
         shaping.shape_result("list_jobs", _page([_job(i) for i in range(500)]))
-        entry = json.loads((tmp_path / "diag.jsonl").read_text().strip().split("\n")[0])
-        assert entry["event"] == "result_shaped"
+        entries = [
+            json.loads(line)
+            for line in (tmp_path / "diag.jsonl").read_text().strip().split("\n")
+        ]
+        # The synthetic job fixture omits some projected fields, so a
+        # projection_mismatch may be recorded alongside the shaping entry.
+        entry = next(e for e in entries if e["event"] == "result_shaped")
         assert entry["original_bytes"] > entry["shaped_bytes"]
         assert entry["tool"] == "list_jobs"
 

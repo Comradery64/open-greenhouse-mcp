@@ -56,9 +56,13 @@ REQUESTS = [
 def main(bundle_dir: str) -> int:
     env = {
         **os.environ,
-        "GREENHOUSE_API_KEY": "smoke-test-not-a-real-key",
+        "GREENHOUSE_CLIENT_ID": "smoke-test-not-a-real-client-id",
+        "GREENHOUSE_CLIENT_SECRET": "smoke-test-not-a-real-secret",
         "GREENHOUSE_DIAGNOSTICS": "off",
     }
+    # This key is v1-only now; leaving it set would not give Harvest access and
+    # would make the smoke test look more capable than the bundle is.
+    env.pop("GREENHOUSE_API_KEY", None)
     # Deliberately no GREENHOUSE_TOOL_PROFILE: the server must land on its own safe
     # default, which is what an install with nothing configured would get.
     env.pop("GREENHOUSE_TOOL_PROFILE", None)

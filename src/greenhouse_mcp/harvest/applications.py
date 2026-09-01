@@ -13,7 +13,16 @@ async def list_applications(
     client: GreenhouseClient,
     *,
     per_page: Annotated[int, Field(description="Results per page (max 500)")] = 500,
-    page: Annotated[int, Field(description="Page number (starts at 1)")] = 1,
+    cursor: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Opaque cursor from a previous call's `next_cursor`, to fetch the "
+                "next page. When set, all other filters are ignored — they are "
+                "already baked into the cursor."
+            )
+        ),
+    ] = None,
     job_id: Annotated[int | None, Field(description="Filter to applications on this job")] = None,
     candidate_id: Annotated[
         int | None, Field(description="Filter to applications for this candidate")
@@ -43,20 +52,22 @@ async def list_applications(
     grouped by stage, use pipeline_summary. For stale candidates, use
     stale_applications or candidates_needing_action.
     """
-    params: dict[str, Any] = {"per_page": per_page, "page": page}
+    params: dict[str, Any] = {"per_page": per_page}
     if job_id is not None:
-        params["job_id"] = job_id
+        params["job_ids"] = job_id
     if candidate_id is not None:
-        params["candidate_id"] = candidate_id
+        params["candidate_ids"] = candidate_id
     if status is not None:
         params["status"] = status
     if created_after is not None:
-        params["created_after"] = created_after
+        params["created_at[gte]"] = created_after
     if created_before is not None:
-        params["created_before"] = created_before
+        params["created_at[lte]"] = created_before
     if last_activity_after is not None:
-        params["last_activity_after"] = last_activity_after
-    return await client.harvest_get("/applications", params=params, paginate=paginate)
+        params["last_activity_at[gte]"] = last_activity_after
+    return await client.harvest_get(
+        "/applications", params=params, paginate=paginate, cursor=cursor
+    )
 
 
 async def get_application(
@@ -70,7 +81,7 @@ async def get_application(
     get_candidate → the applications array has each application's ID and job name.
     For a complete screening package with resume and location, use screen_candidate.
     """
-    return await client.harvest_get_one(f"/applications/{application_id}")
+    return await client.harvest_get_by_id("/applications", application_id)
 
 
 async def create_application(
@@ -194,7 +205,7 @@ async def advance_application(
     json_data: dict[str, Any] = {"from_stage_id": from_stage_id}
     if to_stage_id is not None:
         json_data["to_stage_id"] = to_stage_id
-    return await client.harvest_post(f"/applications/{application_id}/advance", json_data=json_data)
+    return await client.harvest_post(f"/applications/{application_id}/move", json_data=json_data)
 
 
 async def move_application(

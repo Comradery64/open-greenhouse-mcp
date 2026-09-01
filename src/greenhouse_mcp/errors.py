@@ -28,14 +28,15 @@ _MESSAGES: dict[int, tuple[str, bool]] = {
         False,
     ),
     401: (
-        "Greenhouse would not accept this connector's API key. The key may have "
-        "been revoked, expired, or typed incorrectly. This is not something you "
-        "can fix from here.",
+        "Greenhouse would not accept this connector's credentials. The client ID "
+        "or secret may have been revoked, expired, or typed incorrectly. This is "
+        "not something you can fix from here.",
         False,
     ),
     403: (
-        "This connector's API key does not have permission to view that in "
-        "Greenhouse. Your key needs wider access before this will work.",
+        "This connector's credentials do not have permission to view that in "
+        "Greenhouse. Harvest v3 grants access per endpoint, so this scope needs "
+        "to be added before it will work.",
         False,
     ),
     404: (
@@ -90,7 +91,8 @@ def _endpoint_of(url: str | None) -> str:
     if not url:
         return "unknown"
     path = re.sub(r"^https?://[^/]+", "", str(url).split("?", 1)[0])
-    path = re.sub(r"/v1(/partner)?/", "/", path, count=1)
+    # Harvest is on v3; the Job Board and Ingestion APIs are still v1.
+    path = re.sub(r"/v[13](/partner)?/", "/", path, count=1)
     path = re.sub(r"/\d+", "/{id}", path)
     return path or "unknown"
 
@@ -158,9 +160,10 @@ def build_error(
 
 
 CONFIG_MESSAGE = (
-    "This Greenhouse connector has not been given an API key yet, so it cannot "
+    "This Greenhouse connector has not been given credentials yet, so it cannot "
     "look anything up. Nothing is wrong with your request. Someone with admin "
-    "access needs to add a Greenhouse API key to the connector's settings."
+    "access needs to add a Greenhouse client ID and secret to the connector's "
+    "settings."
 )
 INTERNAL_MESSAGE = (
     "Something went wrong inside the Greenhouse connector itself — this is a bug "

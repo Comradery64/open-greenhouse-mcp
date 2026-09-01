@@ -18,11 +18,11 @@ class TestEndpointMasking:
     @pytest.mark.parametrize(
         "url,expected",
         [
-            ("https://harvest.greenhouse.io/v1/jobs", "/jobs"),
-            ("https://harvest.greenhouse.io/v1/jobs/12345", "/jobs/{id}"),
-            ("https://harvest.greenhouse.io/v1/jobs?per_page=500&page=2", "/jobs"),
+            ("https://harvest.greenhouse.io/v3/jobs", "/jobs"),
+            ("https://harvest.greenhouse.io/v3/jobs/12345", "/jobs/{id}"),
+            ("https://harvest.greenhouse.io/v3/jobs?per_page=500&page=2", "/jobs"),
             ("https://api.greenhouse.io/v1/partner/candidates", "/candidates"),
-            ("https://harvest.greenhouse.io/v1/applications/1/offers/2",
+            ("https://harvest.greenhouse.io/v3/applications/1/offers/2",
              "/applications/{id}/offers/{id}"),
             (None, "unknown"),
         ],
@@ -94,7 +94,7 @@ class TestBuildError:
 class TestConfigAndInternalErrors:
     def test_config_error_does_not_blame_the_network(self):
         payload = errors.config_error("no key", "/not-configured")
-        assert "API key" in payload["user_message"]
+        assert "client ID" in payload["user_message"]
         assert "network" not in payload["user_message"].lower()
 
     def test_internal_error_absolves_the_user(self):
